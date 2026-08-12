@@ -59,6 +59,7 @@ final class Config
         'pagination_max_numbers',
         'pagination_prev_label',
         'pagination_next_label',
+        'seo_pagination',
         'no_results_text',
     ];
 
@@ -128,6 +129,13 @@ final class Config
         // Button text (filled with translated defaults by apply_label_defaults()).
         'pagination_prev_label'  => '',
         'pagination_next_label'  => '',
+
+        // Render pagination as crawlable <a href="?lgs_page=2"> links, restore the state
+        // from the query string on load, and keep the URL in step with the visitor's
+        // filters. See UrlState. Turn this off on the secondary instance of a page that
+        // carries two searches: one shared set of query parameters cannot describe both,
+        // so they would otherwise page in lockstep on reload.
+        'seo_pagination'         => true,
 
         // ── Filter bar visibility ────────────────────────────────────────────────
         'show_keyword'       => true,
@@ -386,6 +394,16 @@ final class Config
     }
 
     /**
+     * Whether pagination is rendered as crawlable links backed by query-string state.
+     *
+     * @return bool
+     */
+    public function seo_pagination(): bool
+    {
+        return (bool) $this->values['seo_pagination'];
+    }
+
+    /**
      * Returns any boolean or string configuration value by key.
      *
      * Used by the renderers for labels and visibility toggles, which are numerous
@@ -541,7 +559,7 @@ final class Config
         }
 
         // ── Booleans ─────────────────────────────────────────────────────────────
-        foreach (['show_keyword', 'show_date', 'show_taxonomy', 'show_sort', 'show_clear'] as $flag) {
+        foreach (['show_keyword', 'show_date', 'show_taxonomy', 'show_sort', 'show_clear', 'seo_pagination'] as $flag) {
             if (isset($raw[$flag])) {
                 $values[$flag] = self::to_bool($raw[$flag]);
             }

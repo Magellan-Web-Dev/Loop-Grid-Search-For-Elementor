@@ -7,6 +7,7 @@ namespace LoopGridSearch\Frontend;
 if (!defined('ABSPATH')) exit;
 
 use LoopGridSearch\Ajax\SearchEndpoint;
+use LoopGridSearch\Support\UrlState;
 
 /**
  * Registers and conditionally enqueues the plugin's single CSS and JS file.
@@ -90,6 +91,10 @@ final class AssetManager
             'action'   => SearchEndpoint::ACTION,
             'nonce'    => wp_create_nonce(SearchEndpoint::ACTION),
             'debounce' => (int) apply_filters('lgs_search_debounce_ms', 400),
+
+            // Query parameter names, so the script writes history URLs using exactly the
+            // names PHP reads back on the next page load. One source of truth, in PHP.
+            'params'   => UrlState::param_map(),
             'i18n'     => [
                 'searching' => __('Searching…', 'loop-grid-search'),
                 /* translators: %d: number of matching results */

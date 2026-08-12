@@ -10,6 +10,8 @@ use LoopGridSearch\Frontend\AssetManager;
 use LoopGridSearch\Query\QueryBuilder;
 use LoopGridSearch\Support\Config;
 use LoopGridSearch\Support\Criteria;
+use LoopGridSearch\Support\PageLinks;
+use LoopGridSearch\Support\UrlState;
 
 /**
  * Composes the complete search interface for one instance.
@@ -19,18 +21,21 @@ use LoopGridSearch\Support\Criteria;
  *
  * Output shape:
  *
- *   <div class="ajax-post-search" id="lgs-1" data-lgs-instance>
+ *   <div class="ajax-post-search" id="lgs-1" data-lgs-instance data-lgs-current-page="1">
  *     <script type="application/json" class="ajax-post-search__config">…signed config…</script>
  *     <form class="ajax-post-search__filters" role="search">…</form>
  *     <p class="ajax-post-search__status" role="status" aria-live="polite"></p>
- *     <div class="ajax-post-search__results" tabindex="-1" aria-busy="false">…page 1…</div>
+ *     <div class="ajax-post-search__results" tabindex="-1" aria-busy="false">…results…</div>
  *     <nav class="ajax-post-search__pagination">…</nav>
  *   </div>
  *
  * Notes:
- *  • Page 1 is rendered server-side, so the interface is useful before (and without) any
- *    JavaScript, search engines see real content, and Elementor's conditional asset loader
- *    gets to see every widget the loop template uses during the normal page lifecycle.
+ *  • The requested page is rendered server-side, so the interface is useful before (and
+ *    without) any JavaScript, search engines see real content, and Elementor's conditional
+ *    asset loader gets to see every widget the loop template uses during the normal page
+ *    lifecycle. Which page that is comes from the query string ({@see UrlState}): a visit
+ *    to `?lgs_page=3` renders page 3 outright, which is what makes the pagination links
+ *    crawlable rather than decorative.
  *  • The per-instance configuration travels in a JSON `<script>` block rather than in a
  *    wall of data-* attributes or a per-instance inline `<script>`. One shared JS file
  *    serves any number of instances on a page; each reads its own block.
@@ -60,22 +65,39 @@ final class InterfaceRenderer
 
         $instance_id = $this->resolve_instance_id($instance_id);
 
-        // The initial render is always the unfiltered, newest-first first page.
-        $criteria = Criteria::initial();
+        // What the visitor asked for. With SEO pagination on, that comes from the query
+        // string, so a shared or reloaded URL reproduces exactly what was on screen; with
+        // it off, the initial render is always the unfiltered, newest-first first page.
+        $criteria = $config->seo_pagination()
+            // No nonce: this is a public, read-only render of published posts, and every
+            // value is sanitised and range-checked by Criteria before it reaches a query.
+            // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+            ? UrlState::criteria_from_query(wp_unslash($_GET), $config)
+            : Criteria::initial();
 
         $result   = (new QueryBuilder())->run($config, $criteria);
         $query    = $result['query'];
         $criteria = $result['criteria'];
 
+        $links = $config->seo_pagination()
+            ? new PageLinks(UrlState::current_url(), $criteria, $config, $instance_id)
+            : null;
+
         $results_html    = (new ResultsRenderer())->render($query, $config);
         $pagination_html = (new PaginationRenderer())->render(
             $criteria->page(),
             (int) $query->max_num_pages,
-            $config
+            $config,
+            $links
         );
         $filters_html = (new FiltersRenderer())->render($config, $criteria, $instance_id);
 
-        $html = '<div class="ajax-post-search" id="' . esc_attr($instance_id) . '" data-lgs-instance="1">';
+        // data-lgs-current-page seeds the script's page state, so a server render of page 3
+        // does not leave the script believing it is showing page 1. Deliberately not named
+        // data-lgs-page: that attribute marks an individual pagination control, and the
+        // script's delegated click handler finds those with closest().
+        $html = '<div class="ajax-post-search" id="' . esc_attr($instance_id) . '"'
+            . ' data-lgs-instance="1" data-lgs-current-page="' . (int) $criteria->page() . '">';
 
         $html .= $this->render_instance_style($config, $instance_id);
         $html .= $this->render_config_script($config);

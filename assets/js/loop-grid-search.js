@@ -15,7 +15,26 @@
  *   Enter key      →  immediate                  │
  *   select change  →  immediate, page reset to 1 ├→ request()
  *   pagination     →  immediate, page preserved  │
- *   clear          →  reset all state            ┘
+ *   clear          →  reset all state            │
+ *   Back / Forward →  state re-read from the URL ┘
+ *
+ * URL state (SEO pagination)
+ * --------------------------
+ * The server renders pagination as real links — `?lgs_page=2` — so crawlers can reach
+ * every page and a reload or a shared URL reproduces what was on screen. Here that means:
+ *
+ *   • A plain left-click on a page link is intercepted: preventDefault(), then the same
+ *     AJAX swap as before. No reload, no flash, filter state preserved.
+ *   • A modified click (Cmd/Ctrl/Shift/Alt, or middle-click) is left entirely alone, so
+ *     "open in new tab" works on a page link exactly as it does on any other link.
+ *   • After the response lands, the address bar is brought into step with what is on
+ *     screen: pushState for a page change (Back should return to the previous page of
+ *     results), replaceState for a filter change (typing must not flood the history).
+ *   • popstate re-reads the URL, syncs the form controls to it and re-runs the search,
+ *     so Back and Forward move through the pages the visitor actually saw.
+ *
+ * All of that is skipped when the instance has SEO pagination switched off, in which case
+ * the server emits the old button markup and the URL is never touched.
  *
  * Stale-response protection is belt-and-braces:
  *   1. Each new request aborts the previous one via AbortController, so the browser stops
@@ -36,6 +55,24 @@
 
 	var ROOT_SELECTOR = '.ajax-post-search[data-lgs-instance]';
 	var LOADING_CLASS = 'ajax-post-search--loading';
+
+	/**
+	 * Query parameter names, supplied by PHP so both sides always agree. The literals are
+	 * only a fallback for the case where the settings object failed to print.
+	 */
+	var PARAMS = SETTINGS.params || {
+		page: 'lgs_page',
+		keyword: 'lgs_q',
+		date: 'lgs_date',
+		term: 'lgs_term',
+		sort: 'lgs_sort'
+	};
+
+	/**
+	 * Whether this browser can be asked to rewrite the address bar without navigating.
+	 */
+	var CAN_WRITE_URL = 'function' === typeof window.URL &&
+		!! ( window.history && window.history.pushState && window.history.replaceState );
 
 	/**
 	 * Tracks which roots already have a controller attached, so a re-scan of the DOM
@@ -65,20 +102,27 @@
 		this.clearButton = root.querySelector( '.ajax-post-search__clear' );
 		this.form = root.querySelector( '.ajax-post-search__filters' );
 
+		// Whether this instance owns the page URL. The value rides along in the signed
+		// config block, so there is nothing extra to print per instance.
+		this.usesUrlState = CAN_WRITE_URL && '1' === String( this.config.seo_pagination || '' );
+
 		// Current filter state. Seeded from the DOM so a server-rendered preselection (or a
-		// browser restoring form values on back-navigation) is respected.
+		// browser restoring form values on back-navigation) is respected. The page number
+		// comes from the wrapper, which the server stamps with the page it actually served
+		// — landing on ?lgs_page=3 must not leave the script thinking it is showing page 1.
 		this.state = {
 			keyword: this.keywordInput ? this.keywordInput.value : '',
 			date: this.dateSelect ? this.dateSelect.value : '',
 			term: this.taxonomySelect ? this.taxonomySelect.value : '',
 			sort: this.sortSelect ? this.sortSelect.value : '',
-			paged: 1
+			paged: readPage( root.getAttribute( 'data-lgs-current-page' ) )
 		};
 
 		this.requestToken = 0;
 		this.controller = null;
 		this.debounceTimer = null;
 		this.pendingFocus = false;
+		this.pendingHistory = null;
 
 		this.bindEvents();
 	}
@@ -101,7 +145,7 @@
 				event.preventDefault();
 				self.cancelDebounce();
 				self.syncKeywordFromInput();
-				self.request( { resetPage: true } );
+				self.request( { resetPage: true, history: 'replace' } );
 			} );
 		}
 
@@ -120,7 +164,7 @@
 				event.preventDefault();
 				self.cancelDebounce();
 				self.syncKeywordFromInput();
-				self.request( { resetPage: true } );
+				self.request( { resetPage: true, history: 'replace' } );
 			} );
 
 			// Covers the native clear ("×") button on type="search" in Safari/Chrome, which
@@ -128,7 +172,7 @@
 			this.keywordInput.addEventListener( 'search', function () {
 				self.cancelDebounce();
 				self.syncKeywordFromInput();
-				self.request( { resetPage: true } );
+				self.request( { resetPage: true, history: 'replace' } );
 			} );
 		}
 
@@ -147,8 +191,10 @@
 			element.addEventListener( 'change', function () {
 				self.state[ key ] = element.value;
 				self.cancelDebounce();
-				// Any filter change invalidates the current page position.
-				self.request( { resetPage: true } );
+				// Any filter change invalidates the current page position. The URL is
+				// replaced rather than pushed: a filter change is a correction to where
+				// the visitor already is, not a place to come Back to.
+				self.request( { resetPage: true, history: 'replace' } );
 			} );
 		} );
 
@@ -161,19 +207,26 @@
 
 		if ( this.paginationWrap ) {
 			this.paginationWrap.addEventListener( 'click', function ( event ) {
-				var button = event.target.closest( '[data-lgs-page]' );
+				var control = event.target.closest( '[data-lgs-page]' );
 
-				if ( ! button || ! self.paginationWrap.contains( button ) ) {
+				if ( ! control || ! self.paginationWrap.contains( control ) ) {
+					return;
+				}
+
+				// Let the browser own modified clicks: Cmd/Ctrl-click, Shift-click and
+				// middle-click must open the page of results the href points at, which is
+				// the whole reason these are links rather than buttons.
+				if ( isModifiedClick( event ) ) {
 					return;
 				}
 
 				event.preventDefault();
 
-				if ( button.disabled || 'true' === button.getAttribute( 'aria-disabled' ) ) {
+				if ( control.disabled || 'true' === control.getAttribute( 'aria-disabled' ) ) {
 					return;
 				}
 
-				var page = parseInt( button.getAttribute( 'data-lgs-page' ), 10 );
+				var page = parseInt( control.getAttribute( 'data-lgs-page' ), 10 );
 
 				// Ignore a click on the page already displayed — no request, no flicker.
 				if ( ! page || page === self.state.paged ) {
@@ -183,7 +236,18 @@
 				self.state.paged = page;
 				self.cancelDebounce();
 				self.pendingFocus = true;
-				self.request( { resetPage: false } );
+				// A page change is a step the visitor should be able to reverse with Back.
+				self.request( { resetPage: false, history: 'push' } );
+			} );
+		}
+
+		if ( this.usesUrlState ) {
+			window.addEventListener( 'popstate', function () {
+				self.cancelDebounce();
+				self.readUrlState();
+				// No history write: the browser has already moved the entry pointer, and
+				// writing here would corrupt the very entry being restored.
+				self.request( { resetPage: false, history: null } );
 			} );
 		}
 	};
@@ -209,7 +273,7 @@
 
 		this.debounceTimer = window.setTimeout( function () {
 			self.debounceTimer = null;
-			self.request( { resetPage: true } );
+			self.request( { resetPage: true, history: 'replace' } );
 		}, DEBOUNCE_MS );
 	};
 
@@ -258,13 +322,109 @@
 		};
 
 		this.cancelDebounce();
-		this.request( { resetPage: true } );
+		this.request( { resetPage: true, history: 'replace' } );
+	};
+
+	/**
+	 * Reads the visitor's state back out of the current URL and into the form controls.
+	 *
+	 * Used on Back/Forward, where the browser has restored a URL but nothing else: the
+	 * document is the one already on screen, so the controls and the internal state have
+	 * to be brought to the URL by hand before the search is re-run.
+	 *
+	 * @return {void}
+	 */
+	LoopGridSearchInstance.prototype.readUrlState = function () {
+		var params = new window.URL( window.location.href ).searchParams;
+
+		this.state.keyword = params.get( PARAMS.keyword ) || '';
+		this.state.paged = readPage( params.get( PARAMS.page ) );
+
+		if ( this.keywordInput ) {
+			this.keywordInput.value = this.state.keyword;
+		}
+
+		this.state.date = setSelectValue( this.dateSelect, params.get( PARAMS.date ) );
+		this.state.term = setSelectValue( this.taxonomySelect, params.get( PARAMS.term ) );
+		this.state.sort = setSelectValue( this.sortSelect, params.get( PARAMS.sort ) );
+	};
+
+	/**
+	 * Returns this instance's default sort, i.e. the first option the server rendered.
+	 *
+	 * @return {string}
+	 */
+	LoopGridSearchInstance.prototype.defaultSort = function () {
+		return this.sortSelect && this.sortSelect.options.length ? this.sortSelect.options[ 0 ].value : '';
+	};
+
+	/**
+	 * Rewrites the address bar to match what is currently on screen.
+	 *
+	 * Every parameter this plugin owns is cleared first, so a filter that has been switched
+	 * off leaves no trace behind; anything else already in the query string (a campaign
+	 * tag, another plugin's parameter) is preserved untouched. Page 1 writes no page
+	 * parameter at all, keeping the first page of results at one canonical address.
+	 *
+	 * @param {string} mode 'push' for a new history entry, 'replace' to amend the current one.
+	 * @return {void}
+	 */
+	LoopGridSearchInstance.prototype.syncUrl = function ( mode ) {
+		if ( ! this.usesUrlState ) {
+			return;
+		}
+
+		var url = new window.URL( window.location.href );
+		var params = url.searchParams;
+
+		[ PARAMS.page, PARAMS.keyword, PARAMS.date, PARAMS.term, PARAMS.sort ].forEach( function ( name ) {
+			params.delete( name );
+		} );
+
+		if ( this.state.keyword ) {
+			params.set( PARAMS.keyword, this.state.keyword );
+		}
+
+		if ( this.state.date ) {
+			params.set( PARAMS.date, this.state.date );
+		}
+
+		if ( this.state.term ) {
+			params.set( PARAMS.term, this.state.term );
+		}
+
+		// A sort that only restates the instance's default is left out, so the first
+		// interaction on a search with sorting enabled does not stamp `lgs_sort=newest`
+		// onto every URL the visitor shares for a choice they never made. The server
+		// applies the same rule when it builds the pagination hrefs, and the first option
+		// is exactly what it renders as the default.
+		if ( this.state.sort && this.state.sort !== this.defaultSort() ) {
+			params.set( PARAMS.sort, this.state.sort );
+		}
+
+		if ( this.state.paged > 1 ) {
+			params.set( PARAMS.page, String( this.state.paged ) );
+		}
+
+		// The fragment belongs to the no-JavaScript path only: here the results are already
+		// in view, and leaving #lgs-1 in the address bar would make an otherwise clean URL
+		// look like an anchor link.
+		url.hash = '';
+
+		try {
+			window.history[ 'push' === mode ? 'pushState' : 'replaceState' ]( {}, '', url.toString() );
+		} catch ( error ) {
+			// Some embedded and sandboxed contexts forbid history writes. The results on
+			// screen are correct either way; only the address bar goes stale.
+		}
 	};
 
 	/**
 	 * Issues one AJAX request and applies its response.
 	 *
-	 * @param {{resetPage: boolean}} options Whether to jump back to page 1 first.
+	 * @param {{resetPage: boolean, history: (string|null)}} options
+	 *        resetPage — jump back to page 1 first.
+	 *        history   — 'push', 'replace', or null/omitted to leave the URL alone.
 	 * @return {void}
 	 */
 	LoopGridSearchInstance.prototype.request = function ( options ) {
@@ -277,6 +437,10 @@
 		if ( options && options.resetPage ) {
 			this.state.paged = 1;
 		}
+
+		// Deferred until the response lands, so the URL records the page the server
+		// actually served — an out-of-range request is clamped back into the result set.
+		this.pendingHistory = options && options.history ? options.history : null;
 
 		// (1) Stop the previous request at the network layer.
 		if ( this.controller ) {
@@ -362,6 +526,14 @@
 		body.set( 'sort', this.state.sort || '' );
 		body.set( 'paged', String( this.state.paged || 1 ) );
 
+		if ( this.usesUrlState ) {
+			// admin-ajax.php has no idea which page this instance lives on, and it needs
+			// one to build the hrefs for the replacement pagination markup. The server
+			// accepts this only after checking it points at the same site.
+			body.set( 'page_url', window.location.href );
+			body.set( 'instance', this.root.id || '' );
+		}
+
 		Object.keys( this.config ).forEach( function ( key ) {
 			body.set( 'config[' + key + ']', String( this.config[ key ] ) );
 		}, this );
@@ -403,6 +575,11 @@
 			this.state.paged = data.current_page;
 		}
 
+		if ( this.pendingHistory ) {
+			this.syncUrl( this.pendingHistory );
+			this.pendingHistory = null;
+		}
+
 		this.announce( this.resultsMessage( data.total_results ) );
 
 		if ( this.pendingFocus ) {
@@ -419,6 +596,9 @@
 	 */
 	LoopGridSearchInstance.prototype.showError = function ( message ) {
 		var text = message || I18N.error || 'Something went wrong loading the results.';
+
+		// Nothing was rendered, so there is nothing for the URL to describe.
+		this.pendingHistory = null;
 
 		if ( this.results ) {
 			var paragraph = document.createElement( 'p' );
@@ -589,6 +769,60 @@
 				// Event constructor unavailable — lazy backgrounds simply stay unobserved.
 			}
 		}
+	}
+
+	/**
+	 * True when a click carries a modifier the browser has its own meaning for.
+	 *
+	 * Cmd/Ctrl-click and middle-click open a link in a new tab, Shift-click in a new
+	 * window, Alt-click downloads it. Intercepting any of those would break behaviour the
+	 * visitor expects from every other link on the page.
+	 *
+	 * @param {MouseEvent} event
+	 * @return {boolean}
+	 */
+	function isModifiedClick( event ) {
+		return !! ( event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
+			( 'number' === typeof event.button && 0 !== event.button ) );
+	}
+
+	/**
+	 * Parses a page number, floored at 1.
+	 *
+	 * @param {string|null} value
+	 * @return {number}
+	 */
+	function readPage( value ) {
+		var page = parseInt( value, 10 );
+
+		return page > 0 ? page : 1;
+	}
+
+	/**
+	 * Sets a select to a value, falling back to its first option when the value is absent.
+	 *
+	 * The date and taxonomy selects both carry an explicit "All …" option with an empty
+	 * value, so clearing them is a plain assignment. The sort select may not: when the
+	 * instance's configured order has no matching preset there is no empty-valued option,
+	 * and assigning '' would leave the control blank. Falling back to the first option
+	 * lands on whatever the server renders as this instance's default.
+	 *
+	 * @param {HTMLSelectElement|null} select
+	 * @param {string|null} value
+	 * @return {string} The value the select actually ended up on.
+	 */
+	function setSelectValue( select, value ) {
+		if ( ! select ) {
+			return '';
+		}
+
+		select.value = value || '';
+
+		if ( select.selectedIndex < 0 || select.value !== ( value || '' ) ) {
+			select.selectedIndex = 0;
+		}
+
+		return select.value;
 	}
 
 	/**

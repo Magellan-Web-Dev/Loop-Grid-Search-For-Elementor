@@ -76,6 +76,8 @@ final class SearchShortcode
         'pagination_max_numbers' => 'pagination_max_numbers',
         'pagination_prev_label'  => 'pagination_prev_label',
         'pagination_next_label'  => 'pagination_next_label',
+        // `seo_pagination="no"` reverts to non-crawlable buttons and leaves the URL alone.
+        'seo_pagination'         => 'seo_pagination',
         'show_keyword'          => 'show_keyword',
         'show_date'             => 'show_date',
         'show_taxonomy'         => 'show_taxonomy',

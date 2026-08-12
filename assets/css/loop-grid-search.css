@@ -28,11 +28,11 @@
  *   .ajax-post-search__no-results     empty-state message
  *   .ajax-post-search__error          request-failure message
  *   .ajax-post-search__pagination     <nav> holding the page controls
- *   .ajax-post-search__page           any page button
- *   .ajax-post-search__page--prev     Previous button
- *   .ajax-post-search__page--next     Next button
- *   .ajax-post-search__page--number   numbered page button (+ .is-current)
- *   .ajax-post-search__pages          wrapper around the numbered buttons
+ *   .ajax-post-search__page           any page control (<a>, or <span> when inert)
+ *   .ajax-post-search__page--prev     Previous control (+ .is-disabled on page 1)
+ *   .ajax-post-search__page--next     Next control (+ .is-disabled on the last page)
+ *   .ajax-post-search__page--number   numbered page control (+ .is-current)
+ *   .ajax-post-search__pages          wrapper around the numbered controls
  *   .ajax-post-search__ellipsis       truncation marker (aria-hidden)
  *   .ajax-post-search__page-count     "Page 2 of 5" text, Previous/Next-only style
  *   .ajax-post-search--loading        set on the root while a request is in flight
@@ -189,6 +189,25 @@
 .ajax-post-search__page[aria-disabled="true"] {
 	cursor: default;
 	opacity: 0.5;
+}
+
+/* Page controls are <a> and <span> elements so search engines can crawl the result set,
+   which means they inherit a theme's link styling rather than its button styling. These
+   defaults give them a control-like shape out of the box; every selector is wrapped in
+   :where() for zero specificity, so a theme rule, an Elementor style or a single custom
+   class overrides any of it without !important. */
+:where(a.ajax-post-search__page, span.ajax-post-search__page) {
+	display: inline-block;
+	padding: 0.4em 0.8em;
+	border: 1px solid currentColor;
+	border-radius: 3px;
+	color: inherit;
+	line-height: 1.2;
+	text-decoration: none;
+}
+
+:where(.ajax-post-search__page.is-current) {
+	font-weight: 700;
 }
 
 /* ── Accessibility helpers ─────────────────────────────────────────────────────── */

@@ -11,6 +11,8 @@ use LoopGridSearch\Render\PaginationRenderer;
 use LoopGridSearch\Render\ResultsRenderer;
 use LoopGridSearch\Support\Config;
 use LoopGridSearch\Support\Criteria;
+use LoopGridSearch\Support\PageLinks;
+use LoopGridSearch\Support\UrlState;
 
 /**
  * The single AJAX endpoint that powers every search, filter and page change.
@@ -128,9 +130,27 @@ final class SearchEndpoint
         $total_pages   = (int) $query->max_num_pages;
         $total_results = (int) $query->found_posts;
 
+        // The replacement pagination markup needs the same crawlable hrefs the server
+        // render produced, but this request arrives at admin-ajax.php and knows nothing
+        // about the page the instance sits on. The script therefore sends its own
+        // location, which base_from_client() accepts only if it points at this site.
+        $links = null;
+
+        if ($config->seo_pagination()) {
+            $page_url = isset($_POST['page_url']) && is_scalar($_POST['page_url'])
+                ? (string) wp_unslash($_POST['page_url'])
+                : '';
+
+            $instance = isset($_POST['instance']) && is_scalar($_POST['instance'])
+                ? sanitize_html_class(wp_unslash((string) $_POST['instance']))
+                : '';
+
+            $links = new PageLinks(UrlState::base_from_client($page_url), $criteria, $config, $instance);
+        }
+
         $payload = [
             'html'            => (new ResultsRenderer())->render($query, $config),
-            'pagination_html' => (new PaginationRenderer())->render($criteria->page(), $total_pages, $config),
+            'pagination_html' => (new PaginationRenderer())->render($criteria->page(), $total_pages, $config, $links),
             'current_page'    => $criteria->page(),
             'total_pages'     => $total_pages,
             'total_results'   => $total_results,

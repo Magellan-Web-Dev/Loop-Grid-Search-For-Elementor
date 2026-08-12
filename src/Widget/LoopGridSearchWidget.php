@@ -451,6 +451,17 @@ final class LoopGridSearchWidget extends Widget_Base
             'description' => esc_html__('Beyond this many pages the list truncates with an ellipsis and the visible window follows the current page. With 9 pages and a limit of 6, page 4 shows: … 2 3 4 5 6 7 …', 'loop-grid-search'),
         ]);
 
+        $this->add_control('seo_pagination', [
+            'label'        => esc_html__('SEO-Friendly Page Links', 'loop-grid-search'),
+            'type'         => Controls_Manager::SWITCHER,
+            'default'      => 'yes',
+            'separator'    => 'before',
+            'label_on'     => esc_html__('On', 'loop-grid-search'),
+            'label_off'    => esc_html__('Off', 'loop-grid-search'),
+            'return_value' => 'yes',
+            'description'  => esc_html__('Renders pages as real links (?lgs_page=2) so search engines can crawl every page and a shared or reloaded URL restores the same results. Clicks are still handled without a page reload. Turn this off on the second search widget of a page that has two, so they do not share one set of URL parameters.', 'loop-grid-search'),
+        ]);
+
         $this->end_controls_section();
     }
 
@@ -536,6 +547,7 @@ final class LoopGridSearchWidget extends Widget_Base
             'pagination_max_numbers' => $settings['pagination_max_numbers'] ?? null,
             'pagination_prev_label'  => $settings['pagination_prev_label'] ?? null,
             'pagination_next_label'  => $settings['pagination_next_label'] ?? null,
+            'seo_pagination'         => $settings['seo_pagination'] ?? null,
             'show_keyword'        => $settings['show_keyword'] ?? null,
             'show_date'           => $settings['show_date'] ?? null,
             'show_taxonomy'       => $settings['show_taxonomy'] ?? null,

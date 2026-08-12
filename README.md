@@ -116,6 +116,7 @@ If no ACF fields are detected, the control says so and points you at **Additiona
 | **Previous Button Text** | Text | Previous | |
 | **Next Button Text** | Text | Next | |
 | **Max Page Numbers Shown** | Number | `6` | 3–50. Beyond this many pages the list truncates with an ellipsis. Only shown in the numbered style. |
+| **SEO-Friendly Page Links** | Switcher | On | Renders pages as crawlable `<a href="?lgs_page=2">` links and keeps the URL in step with the visitor's filters. Clicks are still handled without a reload. Turn off on the second search widget of a page that has two. |
 
 See [Pagination](#pagination) below for exactly how truncation behaves.
 
@@ -184,6 +185,7 @@ Both list attributes accept a single value too, so the original one-field form s
 | `pagination_prev_label` | `Previous` | Previous button text. |
 | `pagination_next_label` | `Next` | Next button text. |
 | `pagination_numbers` | — | Legacy boolean spelling. `no` is equivalent to `pagination_mode="prev_next"`. |
+| `seo_pagination` | `yes` | `no` reverts to non-crawlable buttons and stops the plugin touching the URL. See [SEO-friendly pagination](#seo-friendly-pagination). |
 | `show_keyword` | `yes` | |
 | `show_date` | `yes` | |
 | `show_taxonomy` | `yes` | |
@@ -344,9 +346,43 @@ Clearing **both** falls back to Post Title — a keyword box with nothing behind
 | **Previous / Next + Page Numbers** *(default)* | `‹ Previous  1 2 3 4 5 6 …  Next ›` |
 | **Previous / Next Only** | `‹ Previous   Page 2 of 5   Next ›` |
 
-Both styles share the same Previous and Next buttons, whose text you set with **Previous Button Text** / **Next Button Text** (or the `pagination_prev_label` / `pagination_next_label` shortcode attributes).
+Both styles share the same Previous and Next controls, whose text you set with **Previous Button Text** / **Next Button Text** (or the `pagination_prev_label` / `pagination_next_label` shortcode attributes).
 
-Previous is genuinely `disabled` on page 1 and Next on the last page — not merely styled to look inert — and the current page carries `aria-current="page"`.
+Previous on page 1 and Next on the last page are inert `<span aria-disabled="true">` elements rather than links — there is no destination, so there is nothing to link to — and the current page carries `aria-current="page"`.
+
+### SEO-friendly pagination
+
+Every page is a real URL. Page 3 of a result set lives at `?lgs_page=3`, and the pagination renders as ordinary links:
+
+```html
+<a class="ajax-post-search__page ajax-post-search__page--number"
+   href="https://example.com/news/?lgs_page=3#lgs-1"
+   data-lgs-page="3">3</a>
+```
+
+That gets you three things at once:
+
+- **Crawlable.** Search engines follow the links and index every page of results, instead of seeing page 1 and a dead end.
+- **Shareable and reloadable.** Loading `?lgs_page=3` renders page 3 **server-side**, so a bookmark, a pasted link or a browser refresh reproduces exactly what was on screen.
+- **Still instant.** A plain left-click is intercepted with `preventDefault()` and the results are swapped over AJAX — no page reload, no scroll jump, filters preserved. Only the address bar changes, via `history.pushState()`.
+
+Modified clicks are deliberately left alone, so Cmd/Ctrl-click and middle-click open a page of results in a new tab the way they do on any other link. **Back** and **Forward** work too: `popstate` re-reads the URL, syncs the filter controls to it and re-runs the search.
+
+Filters ride along in the same URL, so a filtered view is shareable as well:
+
+| Parameter | Carries |
+|---|---|
+| `lgs_page` | 1-based page number — omitted on page 1, so the first page has exactly one address |
+| `lgs_q` | keyword |
+| `lgs_date` | `YYYY-MM` month selection |
+| `lgs_term` | taxonomy term ID |
+| `lgs_sort` | sort preset key |
+
+All five are prefixed and none is a registered WordPress query var. In particular `lgs_page` is deliberately **not** `paged`, which would make WordPress treat the request as a paged archive and produce 404s and canonical redirects on a singular page. Query parameters this plugin does not own are preserved untouched when the URL is rewritten.
+
+**Two searches on one page.** One set of query parameters cannot describe two instances, so they would page in lockstep on reload. Switch **SEO-Friendly Page Links** off (or pass `seo_pagination="no"`) on the secondary one: it goes back to `<button>` controls and stops reading or writing the URL, while the primary instance keeps its crawlable links.
+
+**Styling note.** Because the controls are now `<a>` and `<span>` elements rather than `<button>`, a theme styles them as links. The plugin ships neutral defaults — padding, a `currentColor` border, no underline — wrapped in `:where()` so their specificity is zero and any theme rule, Elementor style or single custom class overrides them without `!important`.
 
 ### Number truncation
 
@@ -664,9 +700,9 @@ The server always returns rendered markup — the empty state is a real message,
 
 - Every control has a real `<label for="…">` bound to a per-instance unique id.
 - The filter bar is a `<form role="search">` with no `action`, so a no-JavaScript submit reloads the page harmlessly rather than navigating somewhere broken.
-- Pagination uses `<button>` elements with genuine `disabled` (plus `aria-disabled`) and `aria-current="page"`.
+- Pagination uses real `<a href>` links, so it is operable with JavaScript disabled and announced as navigation. Controls that lead nowhere — Previous on page 1, Next on the last page, the current page itself — are `<span>` rather than links, carrying `aria-disabled="true"` and `aria-current="page"` respectively. Nothing simulates a disabled link.
 - After a page change, focus moves to the results region and the viewport scrolls to it; a keyword search leaves the caret in the input.
-- Page 1 is rendered server-side, so the interface is useful before — and without — any JavaScript.
+- The requested page is rendered server-side, so the interface is useful before — and without — any JavaScript. Without it, a pagination link is an ordinary navigation whose fragment lands the visitor at the grid rather than at the top of the document.
 
 ---
 
@@ -723,7 +759,7 @@ There are **no inline `style` attributes**. Per-instance defaults are emitted in
 | `lgs_result_card_template` | `$template, $config` | Point the PHP card at any absolute path. |
 | `lgs_results_html` | `$html, $query, $config` | Wrap or replace the rendered result list. |
 | `lgs_no_results_html` | `$html, $config` | Replace the empty-state markup. |
-| `lgs_pagination_html` | `$html, $current_page, $total_pages, $config` | Replace the pagination markup. |
+| `lgs_pagination_html` | `$html, $current_page, $total_pages, $config, $links` | Replace the pagination markup. `$links` is a `PageLinks` (or `null` when SEO pagination is off); call `$links->for_page( $n )` for a page's URL. |
 | `lgs_filters_html` | `$html, $config, $criteria, $instance_id` | Replace the filter bar markup. |
 | `lgs_interface_html` | `$html, $config, $instance_id` | Wrap or replace the whole interface. |
 | `lgs_ajax_response` | `$payload, $query, $config, $criteria` | Add fields to the AJAX response payload. |
@@ -782,6 +818,12 @@ add_filter( 'lgs_taxonomy_options', function ( array $options, string $taxonomy,
 
 **Full-page caching and nonces.** The `lgs_search` nonce is baked into cached HTML and is valid for 24 hours. If a page is cached for longer than that, a visitor may load stale HTML whose nonce has expired; the endpoint then returns `lgs_invalid_nonce` and the interface shows "Your session has expired. Please reload the page and try again." Keep the page cache TTL under 24 hours, or exclude pages carrying a search instance from full-page caching.
 
+**Full-page caching and `?lgs_page=`.** Because pages of results are now distinct URLs, a page cache must treat them as distinct entries. Most do by default, but several are configured to strip or ignore unrecognised query parameters — which would serve page 1's HTML at `?lgs_page=3`. If you use a page cache or a CDN, add `lgs_page`, `lgs_q`, `lgs_date`, `lgs_term` and `lgs_sort` to its list of cache-varying parameters, or exclude pages carrying a search instance. Visitors with JavaScript are unaffected either way — only the crawler's and the shared-link view is.
+
+**One URL, one instance.** The query parameters are page-global, so two search instances on the same page would both honour `?lgs_page=2` on reload. Switch **SEO-Friendly Page Links** off on the secondary instance; see [SEO-friendly pagination](#seo-friendly-pagination).
+
+**Canonical tags are your SEO plugin's job.** The plugin makes each page of results reachable and indexable; it does not emit `<link rel="canonical">`, `robots` directives or a paginated-series title. If your SEO plugin writes a canonical URL that drops the query string, every page of results will canonicalise back to page 1 and only page 1 will be indexed. Configure the plugin to preserve `lgs_page` (or to treat it as a pagination parameter) if you want the later pages indexed on their own.
+
 **`hide_empty` is per-taxonomy, not per-post-type.** WordPress term counts are not split by post type. When a taxonomy is shared across post types, a term whose only posts belong to a *different* post type still appears in the dropdown (and yields no results). That is a WordPress data-model limitation; use `lgs_taxonomy_options` to narrow the list — see the example above.
 
 **Elementor widget assets inside a loop template.** Widgets that need their own CSS/JS are covered because page 1 renders server-side during the normal page lifecycle, which lets Elementor's conditional asset loader enqueue them. A widget that appears *only* on later pages (an alternate template, a conditional element) could arrive without its assets. If you hit that, either keep the loop template's widget set uniform or disable Elementor's *Improved Asset Loading* experiment.
@@ -818,6 +860,16 @@ GitHub archives extract into a version-stamped folder, so an `upgrader_post_inst
 ---
 
 ## Changelog
+
+### 1.7.0
+- **SEO-friendly pagination.** Page controls are now real `<a href="?lgs_page=2">` links instead of `<button>` elements with the page number hidden in a data attribute. Search engines can crawl the whole result set, and loading such a URL renders that page server-side.
+- Clicks are still handled without a page reload: a plain left-click is intercepted with `preventDefault()` and the results are swapped over AJAX exactly as before. Modified clicks (Cmd/Ctrl, Shift, Alt, middle-click) are left to the browser, so "open in new tab" works.
+- The address bar follows what is on screen — `pushState` for a page change, `replaceState` for a filter change — and **Back/Forward** re-read the URL, sync the filter controls and re-run the search.
+- Filters travel in the URL too (`lgs_q`, `lgs_date`, `lgs_term`, `lgs_sort`), so a filtered view is shareable and survives a reload. Page 1 writes no page parameter, keeping one address per page of results.
+- Controls that lead nowhere — Previous on page 1, Next on the last page, the current page — are inert `<span>` elements rather than links or fake-disabled anchors.
+- New **SEO-Friendly Page Links** switcher (shortcode: `seo_pagination="no"`) reverts to the previous button markup and leaves the URL alone. Use it on the second search instance of a page that carries two.
+- `lgs_pagination_html` gains a fifth argument, the `PageLinks` URL builder.
+- Because `seo_pagination` joins the signed configuration payload, HTML cached from an earlier version will fail signature verification once. Flush your page cache after updating; an un-flushed page shows "This search could not be verified. Please reload the page and try again." until it is reloaded.
 
 ### 1.4.0
 - **Fixed: widgets using Motion Effects vanished after an AJAX search.** When an entrance animation is set, Elementor's PHP stamps `elementor-invisible` on the element wrapper and its CSS defines `.elementor-invisible { visibility: hidden }`. The class is removed only by Elementor's `GlobalHandler.animate()`, which runs off the `frontend/element_ready/global` action. That action is fired by `elementsHandler.runReadyTrigger()`, which Elementor's `DocumentHandler` calls **once**, at page load, over the elements present at the time. Markup arriving later over AJAX was never initialised, so the class was never removed and the content stayed permanently hidden — not just un-animated.
