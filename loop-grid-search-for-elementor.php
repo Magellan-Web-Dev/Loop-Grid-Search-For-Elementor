@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Loop Grid Search for Elementor
  * Description:       AJAX keyword / date / taxonomy search and filtering for any post type, rendered server-side through an Elementor loop template. Ships as both a shortcode and a drag-and-drop "Loop Grid Search" Elementor widget.
- * Version:           1.4.0
+ * Version:           1.5.0
  * Author:            Chris Paschall
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
@@ -57,7 +57,7 @@ if (version_compare(PHP_VERSION, '8.1', '<')) {
 } else {
 
     /** @var string Plugin version. */
-    define('LGS_VERSION', '1.4.0');
+    define('LGS_VERSION', '1.5.0');
 
     /** @var string Absolute path to the main plugin file. */
     define('LGS_FILE', __FILE__);

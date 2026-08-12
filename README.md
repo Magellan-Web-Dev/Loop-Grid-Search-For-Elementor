@@ -628,6 +628,22 @@ Stale-response protection is belt-and-braces:
 
 Typing `s → so → sol → sola → solar` therefore always paints the results for `solar`, whatever order the five responses arrive in.
 
+### Elementor widgets inside AJAX results
+
+Elementor initialises its widgets exactly once, at page load: its `DocumentHandler` walks every `.elementor-element` and calls `elementsHandler.runReadyTrigger()`, which fires the `frontend/element_ready/*` actions each widget's JavaScript listens on. Markup that arrives later over AJAX is never seen by that pass.
+
+For most widgets that would only cost interactivity. For **Motion Effects** it hides the content outright: when an entrance animation is configured, Elementor's PHP stamps `elementor-invisible` on the wrapper and its CSS defines `.elementor-invisible { visibility: hidden }`. The only thing that ever removes that class is `GlobalHandler.animate()`, running off `frontend/element_ready/global`. No ready trigger, no removal — the widget stays invisible forever.
+
+So after injecting results the plugin re-runs the ready trigger for every `.elementor-element` in the new subtree — the same sequence Elementor Pro performs after replacing loop content during its own AJAX pagination. That restores entrance animations and every other in-template widget handler: sliders, carousels, counters, tabs, accordions, video, forms. Pro's lazy-loaded background images are re-observed with the `elementor/lazyload/observe` event.
+
+If Elementor's frontend API is missing or throws, the plugin removes `elementor-invisible` itself. Animations are a nice-to-have; invisible results are not.
+
+Themes and plugins that inject Elementor markup themselves can reuse this:
+
+```js
+window.LoopGridSearch.initElementor( containerElement );
+```
+
 ### Loading state
 
 While a request is in flight:
@@ -802,6 +818,13 @@ GitHub archives extract into a version-stamped folder, so an `upgrader_post_inst
 ---
 
 ## Changelog
+
+### 1.4.0
+- **Fixed: widgets using Motion Effects vanished after an AJAX search.** When an entrance animation is set, Elementor's PHP stamps `elementor-invisible` on the element wrapper and its CSS defines `.elementor-invisible { visibility: hidden }`. The class is removed only by Elementor's `GlobalHandler.animate()`, which runs off the `frontend/element_ready/global` action. That action is fired by `elementsHandler.runReadyTrigger()`, which Elementor's `DocumentHandler` calls **once**, at page load, over the elements present at the time. Markup arriving later over AJAX was never initialised, so the class was never removed and the content stayed permanently hidden — not just un-animated.
+- Results injected by AJAX now re-run Elementor's ready triggers for every `.elementor-element` in the new subtree, which is exactly what Elementor Pro's own AJAX pagination does after replacing loop content. This restores entrance animations, and with them every other widget handler (sliders, counters, tabs, accordions, video, forms) inside a loop template.
+- Elementor Pro's lazy-loaded background images are re-observed via the `elementor/lazyload/observe` event, mirroring Pro's `afterInsertPosts()`.
+- If Elementor's frontend API is unavailable or throws, the plugin strips `elementor-invisible` itself so results can never be left invisible — animations are optional, visible content is not.
+- Exposed `window.LoopGridSearch.initElementor( scope )` for themes and plugins that inject Elementor markup themselves and hit the same problem.
 
 ### 1.3.0
 - **Fixed: Loop Item templates rendered without their CSS.** Elementor has two stylesheet pipelines and the plugin was using the wrong one for Loop Item templates. `Elementor\Core\Files\CSS\Post` writes `post-{id}.css` (handle `elementor-post-{id}`); Elementor Pro's Loop Item documents use `…\LoopBuilder\Files\Css\Loop`, which writes `loop-{id}.css` (handle `loop-{id}`). Both share the same `_elementor_css` post meta, so the generic `get_builder_content_for_display()` call read Pro's meta, saw status "file", and enqueued a `post-{id}.css` that Elementor had never generated — a 404, and completely unstyled loop items on first paint. On an AJAX request Elementor forces its CSS inline, which is why *most* styling reappeared after a search while the template's Custom CSS and per-post dynamic CSS stayed missing.

@@ -387,6 +387,10 @@
 			// The server always sends markup — the empty state is a rendered message, never
 			// an empty string — so zero results can never blank the area or throw here.
 			this.results.innerHTML = 'string' === typeof data.html ? data.html : '';
+
+			// Must run after the markup is in the document: Elementor's ready trigger walks
+			// up the tree with closest(), which only works once the nodes are attached.
+			initElementorElements( this.results );
 		}
 
 		if ( this.paginationWrap ) {
@@ -509,6 +513,85 @@
 	};
 
 	/**
+	 * Re-runs Elementor's frontend element handlers over freshly injected markup.
+	 *
+	 * Elementor initialises widgets exactly once, on page load: its DocumentHandler iterates
+	 * every `.elementor-element` and calls `elementsHandler.runReadyTrigger()`, which fires
+	 * the `frontend/element_ready/*` actions each widget's JS handler listens on. Markup that
+	 * arrives later over AJAX is never seen by that pass.
+	 *
+	 * For most widgets that only costs interactivity, but for **Motion Effects** it hides the
+	 * content outright. When an entrance animation is configured, PHP stamps
+	 * `elementor-invisible` onto the widget wrapper (`element-base.php`), and Elementor's CSS
+	 * defines `.elementor-invisible { visibility: hidden }`. The only thing that ever removes
+	 * that class is `GlobalHandler.animate()`, which runs off `frontend/element_ready/global`.
+	 * No ready trigger means the class is never removed and the widget stays invisible
+	 * forever — the reason animated widgets disappeared after a search.
+	 *
+	 * The re-init below is the same sequence Elementor Pro itself performs after replacing
+	 * loop content during AJAX pagination: run the ready trigger for every `.elementor-element`
+	 * in the new subtree, then let Pro re-observe any lazy-loaded background images.
+	 *
+	 * @param {Element} scope Container holding the newly inserted markup.
+	 * @return {void}
+	 */
+	function initElementorElements( scope ) {
+		if ( ! scope || 'function' !== typeof scope.querySelectorAll ) {
+			return;
+		}
+
+		var elements = scope.querySelectorAll( '.elementor-element' );
+
+		if ( ! elements.length ) {
+			return;
+		}
+
+		var frontend = window.elementorFrontend;
+		var handler = frontend && frontend.elementsHandler;
+		var canTrigger = !! ( handler && 'function' === typeof handler.runReadyTrigger );
+		var triggered = false;
+
+		if ( canTrigger ) {
+			Array.prototype.forEach.call( elements, function ( element ) {
+				try {
+					handler.runReadyTrigger( element );
+					triggered = true;
+				} catch ( error ) {
+					// One widget's handler throwing must not stop the rest from initialising.
+				}
+			} );
+		}
+
+		if ( ! triggered ) {
+			// Elementor's API is absent or refused to run. Animations are a nice-to-have;
+			// content being permanently invisible is not acceptable, so strip the class the
+			// animation handler would have removed. Only reached when the blessed path
+			// failed, so this never races Elementor's own timing.
+			Array.prototype.forEach.call(
+				scope.querySelectorAll( '.elementor-invisible' ),
+				function ( element ) {
+					element.classList.remove( 'elementor-invisible' );
+				}
+			);
+
+			return;
+		}
+
+		// Elementor Pro lazy-loads background images through an IntersectionObserver that
+		// only knows about elements present when it was created; this event asks it to pick
+		// up the new ones. Mirrors Pro's own afterInsertPosts().
+		var proConfig = window.ElementorProFrontendConfig;
+
+		if ( proConfig && proConfig.settings && proConfig.settings.lazy_load_background_images ) {
+			try {
+				document.dispatchEvent( new Event( 'elementor/lazyload/observe' ) );
+			} catch ( error ) {
+				// Event constructor unavailable — lazy backgrounds simply stay unobserved.
+			}
+		}
+	}
+
+	/**
 	 * Reads and validates the signed configuration block inside a root element.
 	 *
 	 * @param {HTMLElement} root
@@ -610,5 +693,13 @@
 	}
 
 	// Public surface, for themes that render an instance themselves.
-	window.LoopGridSearch = { init: init, initAll: initAll };
+	//
+	// initElementor() is exposed because the problem it solves is not specific to this
+	// plugin: any code that injects Elementor markup after page load has to re-run the
+	// ready triggers, or widgets with entrance animations stay permanently hidden.
+	window.LoopGridSearch = {
+		init: init,
+		initAll: initAll,
+		initElementor: initElementorElements
+	};
 })();
