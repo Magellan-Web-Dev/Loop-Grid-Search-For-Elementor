@@ -1,0 +1,208 @@
+/**
+ * Loop Grid Search for Elementor — functional styles only.
+ *
+ * Deliberately unopinionated. This file covers layout, the loading state and accessibility
+ * primitives; it sets no colours, no typography, no borders and no spacing beyond the grid
+ * gap. Style the interface from your theme or from Elementor's Style tab.
+ *
+ * Two custom properties drive the grid and are set per instance:
+ *   --lgs-columns   result columns (default 3)
+ *   --lgs-gap       grid gap       (default 24px)
+ *
+ * The plugin's per-instance defaults are emitted with a :where() selector, i.e. zero
+ * specificity — one class of your own overrides them, no !important needed.
+ *
+ * Class reference
+ *   .ajax-post-search                 instance root
+ *   .ajax-post-search__filters        filter bar (a <form role="search">)
+ *   .ajax-post-search__field          one label + control pair
+ *   .ajax-post-search__label          <label> element
+ *   .ajax-post-search__keyword        keyword <input type="search">
+ *   .ajax-post-search__date           Month / Year <select>
+ *   .ajax-post-search__taxonomy       taxonomy term <select>
+ *   .ajax-post-search__sort           sort <select> (optional)
+ *   .ajax-post-search__clear          Clear Filters <button>
+ *   .ajax-post-search__results        results region (aria-busy toggles here)
+ *   .ajax-post-search__list           results grid
+ *   .ajax-post-search__item           one result cell
+ *   .ajax-post-search__no-results     empty-state message
+ *   .ajax-post-search__error          request-failure message
+ *   .ajax-post-search__pagination     <nav> holding the page controls
+ *   .ajax-post-search__page           any page button
+ *   .ajax-post-search__page--prev     Previous button
+ *   .ajax-post-search__page--next     Next button
+ *   .ajax-post-search__page--number   numbered page button (+ .is-current)
+ *   .ajax-post-search__pages          wrapper around the numbered buttons
+ *   .ajax-post-search__ellipsis       truncation marker (aria-hidden)
+ *   .ajax-post-search__page-count     "Page 2 of 5" text, Previous/Next-only style
+ *   .ajax-post-search--loading        set on the root while a request is in flight
+ */
+
+/* ── Root ──────────────────────────────────────────────────────────────────────── */
+
+.ajax-post-search {
+	position: relative;
+}
+
+/* ── Filter bar ────────────────────────────────────────────────────────────────── */
+
+.ajax-post-search__filters {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-end;
+	gap: var(--lgs-gap, 24px);
+	margin-block-end: var(--lgs-gap, 24px);
+}
+
+.ajax-post-search__field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35em;
+	min-width: 0;
+}
+
+/* The keyword field is the primary control, so it takes the leftover space. */
+.ajax-post-search__field--keyword {
+	flex: 1 1 16rem;
+}
+
+.ajax-post-search__keyword,
+.ajax-post-search__date,
+.ajax-post-search__taxonomy,
+.ajax-post-search__sort {
+	/* Keeps a long <select> option list from forcing the bar wider than its container. */
+	max-width: 100%;
+}
+
+/* ── Results grid ──────────────────────────────────────────────────────────────── */
+
+.ajax-post-search__results {
+	/* Containing block for the loading spinner below. */
+	position: relative;
+
+	/* Focus is moved here after a page change; the outline is the theme's business, but
+	   the element must not show a stray outline just because it is programmatically
+	   focusable. */
+	outline: none;
+}
+
+.ajax-post-search__list {
+	display: grid;
+	grid-template-columns: repeat(var(--lgs-columns, 3), minmax(0, 1fr));
+	gap: var(--lgs-gap, 24px);
+}
+
+.ajax-post-search__item {
+	min-width: 0;
+}
+
+/* Sensible narrow-viewport behaviour for the shortcode, which has no responsive controls.
+   The Elementor widget sets --lgs-columns per breakpoint itself, and its generated CSS is
+   more specific than this rule, so these fallbacks never fight it. */
+@media (max-width: 1024px) {
+	.ajax-post-search__list {
+		grid-template-columns: repeat(min(var(--lgs-columns, 3), 2), minmax(0, 1fr));
+	}
+}
+
+@media (max-width: 640px) {
+	.ajax-post-search__list {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.ajax-post-search__field--keyword,
+	.ajax-post-search__field--date,
+	.ajax-post-search__field--taxonomy,
+	.ajax-post-search__field--sort {
+		flex: 1 1 100%;
+	}
+}
+
+/* ── Loading state ─────────────────────────────────────────────────────────────── */
+
+/* Existing results stay in place and fade, so the page never collapses mid-request. */
+.ajax-post-search--loading .ajax-post-search__results {
+	opacity: 0.45;
+	transition: opacity 150ms ease-out;
+	pointer-events: none;
+}
+
+.ajax-post-search--loading .ajax-post-search__pagination-wrap {
+	opacity: 0.45;
+	pointer-events: none;
+}
+
+/* Spinner, positioned over the results region. */
+.ajax-post-search--loading .ajax-post-search__results::after {
+	content: "";
+	position: absolute;
+	inset-block-start: 1.5rem;
+	inset-inline-start: 50%;
+	width: 2rem;
+	height: 2rem;
+	margin-inline-start: -1rem;
+	border: 2px solid currentColor;
+	border-block-start-color: transparent;
+	border-radius: 50%;
+	opacity: 0.7;
+	animation: lgs-spin 700ms linear infinite;
+}
+
+@keyframes lgs-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ajax-post-search--loading .ajax-post-search__results::after {
+		animation-duration: 2s;
+	}
+
+	.ajax-post-search--loading .ajax-post-search__results {
+		transition: none;
+	}
+}
+
+/* ── Pagination ────────────────────────────────────────────────────────────────── */
+
+.ajax-post-search__pagination {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.5em;
+	margin-block-start: var(--lgs-gap, 24px);
+}
+
+.ajax-post-search__pages {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.35em;
+}
+
+.ajax-post-search__page {
+	cursor: pointer;
+}
+
+.ajax-post-search__page[disabled],
+.ajax-post-search__page[aria-disabled="true"] {
+	cursor: default;
+	opacity: 0.5;
+}
+
+/* ── Accessibility helpers ─────────────────────────────────────────────────────── */
+
+/* Local copy so the live region is hidden even in a theme that does not define
+   .screen-reader-text. Matches WordPress core's implementation. */
+.ajax-post-search .screen-reader-text {
+	position: absolute !important;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
