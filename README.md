@@ -409,7 +409,26 @@ Elementor template  ─or─  PHP card
 Finished HTML in one JSON response
 ```
 
-### With an Elementor template
+### With a Loop Item template
+
+Loop Item templates take a dedicated path, because Elementor has **two stylesheet pipelines** and they are not interchangeable:
+
+| Document type | CSS class | File | Handle |
+|---|---|---|---|
+| Section / container / page | `Elementor\Core\Files\CSS\Post` | `post-{id}.css` | `elementor-post-{id}` |
+| **Loop Item** | Pro's `…\LoopBuilder\Files\Css\Loop` | `loop-{id}.css` | `loop-{id}` |
+
+Both classes share the same `_elementor_css` post meta key. So calling the generic render API on a Loop Item template reads Pro's meta, sees status `file`, and enqueues `post-{id}.css` — **a file Elementor never generated**. The request 404s and the loop items render unstyled.
+
+The plugin therefore routes Loop Item documents through `$document->get_content()`, which is exactly what Elementor Pro's own Loop Grid does (its skin calls `Theme_Document::print_content()`, a thin `echo $this->get_content()`). Pro's `Loop::get_content()` installs its `prevent_inline_css_printing` filter, emits the correct `loop-{id}` stylesheet — including the template's **Custom CSS** — and returns the markup.
+
+Per-result **dynamic CSS** is emitted too. Styles driven by dynamic tags (a background image from an ACF field, a per-post colour) are generated per post and have their selectors rewritten from `.elementor-{post}` to `.e-loop-item-{post}`, so they cannot be printed once and reused like the template stylesheet.
+
+Both calls `echo` rather than return, so the plugin buffers them and prepends the captured CSS to the card markup — which keeps an AJAX response self-contained.
+
+If Elementor Pro is absent or a future release moves these classes, the plugin falls back to the generic path rather than fataling (and re-throws under `WP_DEBUG` so the breakage is visible while developing).
+
+### With any other Elementor template
 
 Each result is rendered through Elementor's public, documented render API:
 
@@ -783,6 +802,16 @@ GitHub archives extract into a version-stamped folder, so an `upgrader_post_inst
 ---
 
 ## Changelog
+
+### 1.3.0
+- **Fixed: Loop Item templates rendered without their CSS.** Elementor has two stylesheet pipelines and the plugin was using the wrong one for Loop Item templates. `Elementor\Core\Files\CSS\Post` writes `post-{id}.css` (handle `elementor-post-{id}`); Elementor Pro's Loop Item documents use `…\LoopBuilder\Files\Css\Loop`, which writes `loop-{id}.css` (handle `loop-{id}`). Both share the same `_elementor_css` post meta, so the generic `get_builder_content_for_display()` call read Pro's meta, saw status "file", and enqueued a `post-{id}.css` that Elementor had never generated — a 404, and completely unstyled loop items on first paint. On an AJAX request Elementor forces its CSS inline, which is why *most* styling reappeared after a search while the template's Custom CSS and per-post dynamic CSS stayed missing.
+- Loop Item templates now render through `$document->get_content()` — the exact entry point Elementor Pro's own Loop Grid uses (`Theme_Document::print_content()` is a thin `echo $this->get_content()`). Pro's `Loop::get_content()` suppresses the generic CSS printing, emits the correct `loop-{id}` stylesheet including the template's **Custom CSS**, and returns the markup.
+- Added **per-post dynamic CSS** (`Loop_CSS::print_dynamic_css()`), the styles produced by dynamic tags whose selectors are rewritten from `.elementor-{post}` to `.e-loop-item-{post}`. These differ for every result, so they are emitted per card rather than once.
+- The print-once CSS guard is now applied only to non-loop templates; Loop Item documents dedupe their own stylesheet.
+- Non-loop templates (section, container, page) are unchanged and still use `get_builder_content_for_display()`.
+- If Elementor Pro is missing or moves these classes, the plugin falls back to the previous behaviour instead of fataling — and re-throws under `WP_DEBUG` so the breakage is visible in development.
+
+**After updating, flush any page cache.** Pages already cached will still contain the unstyled markup.
 
 ### 1.2.0
 - **Pagination Style** control: *Previous / Next + Page Numbers* (default) or *Previous / Next Only* with a "Page 2 of 5" counter.

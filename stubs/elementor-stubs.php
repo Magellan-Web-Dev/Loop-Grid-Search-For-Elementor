@@ -305,6 +305,9 @@ if (false) {
 
         /** @var Elements_Manager */
         public $elements_manager;
+
+        /** @var \Elementor\Core\Base\Documents_Manager */
+        public $documents;
     }
 
     /**
@@ -329,3 +332,67 @@ if (false) {
     }
 
 } // end if (false)
+
+namespace Elementor\Core\Base;
+
+if (false) {
+
+    /**
+     * Registry of Elementor documents (pages, templates, loop items…).
+     */
+    class Documents_Manager
+    {
+        /**
+         * Returns the document that should be rendered on the frontend for a post ID.
+         *
+         * @param  int $_post_id
+         * @return Document|false
+         */
+        public function get_doc_for_frontend(int $_post_id): mixed
+        {
+            return false;
+        }
+
+        /**
+         * Returns the document registered for a post ID.
+         *
+         * @param  int $_post_id
+         * @return Document|false
+         */
+        public function get(int $_post_id): mixed
+        {
+            return false;
+        }
+    }
+
+    /**
+     * Base class for all Elementor documents.
+     *
+     * Only the members this plugin touches are stubbed. Elementor Pro's Loop Item document
+     * overrides get_content() to print its own `loop-{id}` stylesheet before returning the
+     * item markup — which is why this plugin calls get_content() for loop templates.
+     */
+    class Document
+    {
+        /**
+         * Returns the document type slug (e.g. "loop-item", "section", "page").
+         *
+         * @return string
+         */
+        public static function get_type(): string
+        {
+            return '';
+        }
+
+        /**
+         * Renders the document and returns its HTML.
+         *
+         * @param  bool $_with_css
+         * @return string
+         */
+        public function get_content(bool $_with_css = false): string
+        {
+            return '';
+        }
+    }
+}
