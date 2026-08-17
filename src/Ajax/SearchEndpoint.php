@@ -145,7 +145,7 @@ final class SearchEndpoint
                 ? sanitize_html_class(wp_unslash((string) $_POST['instance']))
                 : '';
 
-            $links = new PageLinks(UrlState::base_from_client($page_url), $criteria, $config, $instance);
+            $links = new PageLinks(UrlState::base_from_client($page_url, $config), $criteria, $config, $instance);
         }
 
         $payload = [

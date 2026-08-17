@@ -269,6 +269,25 @@ if (false) {
 
         /** @var string Colour picker control type. */
         const COLOR = 'color';
+
+        /** @var string Repeatable group-of-controls type. */
+        const REPEATER = 'repeater';
+    }
+
+    /**
+     * Collects a set of controls that an author can repeat as rows.
+     */
+    class Repeater extends Element_Base
+    {
+        /**
+         * Returns the collected control definitions, for a REPEATER control's `fields`.
+         *
+         * @return array<string, array<string, mixed>>
+         */
+        public function get_controls(?string $_control_id = null): mixed
+        {
+            return [];
+        }
     }
 
     /**

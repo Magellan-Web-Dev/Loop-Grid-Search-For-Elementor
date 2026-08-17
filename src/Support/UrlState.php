@@ -34,11 +34,19 @@ if (!defined('ABSPATH')) exit;
  * WordPress treat the request as a paged archive, producing 404s and canonical redirects
  * on a singular page.
  *
- *   lgs_page   1-based page number (omitted entirely on page 1)
- *   lgs_q      keyword
- *   lgs_date   YYYY-MM month selection
- *   lgs_term   taxonomy term ID
- *   lgs_sort   sort preset key
+ *   lgs_page          1-based page number (omitted entirely on page 1)
+ *   lgs_q             keyword
+ *   lgs_date          YYYY-MM month selection
+ *   lgs_term_<slug>   term ID selected in that taxonomy's dropdown
+ *   lgs_sort          sort preset key
+ *
+ * ## Why term parameters carry the taxonomy slug
+ *
+ * An instance may render several taxonomy dropdowns, so one `lgs_term` cannot describe the
+ * state: `?lgs_term_category=4&lgs_term_post_tag=9` can, and each parameter keeps its meaning
+ * no matter how the author later reorders the dropdowns. The bare `lgs_term` is still *read*
+ * as an alias for the first configured taxonomy, so links shared or indexed before this
+ * scheme existed keep resolving to the same results; it is simply never written any more.
  */
 final class UrlState
 {
@@ -51,7 +59,14 @@ final class UrlState
     /** @var string Query parameter carrying the YYYY-MM month selection. */
     public const PARAM_DATE = 'lgs_date';
 
-    /** @var string Query parameter carrying the taxonomy term ID. */
+    /**
+     * Legacy query parameter carrying a single taxonomy term ID.
+     *
+     * Read as an alias for the first configured taxonomy; never written. Also the prefix the
+     * per-taxonomy parameters are built from — see {@see term_param()}.
+     *
+     * @var string
+     */
     public const PARAM_TERM = 'lgs_term';
 
     /** @var string Query parameter carrying the sort preset key. */
@@ -76,33 +91,57 @@ final class UrlState
     ];
 
     /**
+     * Returns the query parameter that carries one taxonomy's selected term.
+     *
+     * @param  string $taxonomy Taxonomy slug (already sanitised by Config).
+     * @return string
+     */
+    public static function term_param(string $taxonomy): string
+    {
+        return self::PARAM_TERM . '_' . $taxonomy;
+    }
+
+    /**
      * Returns every query parameter this plugin owns.
      *
-     * Used to strip stale state out of a base URL before fresh state is appended.
+     * Used to strip stale state out of a base URL before fresh state is appended. Passing the
+     * instance's Config adds its per-taxonomy term parameters; the legacy `lgs_term` is always
+     * included, so a URL carrying it does not keep it alongside the parameter that replaced it.
      *
+     * @param  Config|null $config
      * @return list<string>
      */
-    public static function params(): array
+    public static function params(?Config $config = null): array
     {
-        return array_keys(self::PARAM_MAP);
+        $params = array_keys(self::PARAM_MAP);
+
+        if ($config instanceof Config) {
+            foreach ($config->taxonomies() as $taxonomy) {
+                $params[] = self::term_param($taxonomy);
+            }
+        }
+
+        return $params;
     }
 
     /**
      * Returns the parameter names keyed by their short role name, for the browser.
      *
      * Emitted in the script settings object so the JavaScript builds history URLs from
-     * the same names PHP reads, with no second copy of the list to drift.
+     * the same names PHP reads, with no second copy of the list to drift. `termPrefix` is the
+     * stem the script appends a taxonomy slug to, matching {@see term_param()}.
      *
      * @return array<string, string>
      */
     public static function param_map(): array
     {
         return [
-            'page'    => self::PARAM_PAGE,
-            'keyword' => self::PARAM_KEYWORD,
-            'date'    => self::PARAM_DATE,
-            'term'    => self::PARAM_TERM,
-            'sort'    => self::PARAM_SORT,
+            'page'       => self::PARAM_PAGE,
+            'keyword'    => self::PARAM_KEYWORD,
+            'date'       => self::PARAM_DATE,
+            'term'       => self::PARAM_TERM,
+            'termPrefix' => self::PARAM_TERM . '_',
+            'sort'       => self::PARAM_SORT,
         ];
     }
 
@@ -120,6 +159,16 @@ final class UrlState
         foreach (self::PARAM_MAP as $param => $request_key) {
             if (isset($query[$param])) {
                 $request[$request_key] = $query[$param];
+            }
+        }
+
+        // One parameter per taxonomy dropdown. Read after the map above so an explicit
+        // per-taxonomy parameter wins over the legacy `lgs_term` alias for the same dropdown.
+        foreach ($config->taxonomies() as $taxonomy) {
+            $param = self::term_param($taxonomy);
+
+            if (isset($query[$param])) {
+                $request['terms'][$taxonomy] = $query[$param];
             }
         }
 
@@ -156,8 +205,8 @@ final class UrlState
             $args[self::PARAM_DATE] = sprintf('%04d-%02d', $criteria->year(), $criteria->month());
         }
 
-        if ($criteria->has_term()) {
-            $args[self::PARAM_TERM] = (string) $criteria->term_id();
+        foreach ($criteria->terms() as $taxonomy => $term_id) {
+            $args[self::term_param($taxonomy)] = (string) $term_id;
         }
 
         $default_sort = Criteria::preset_for($config->orderby(), $config->order());
@@ -180,9 +229,11 @@ final class UrlState
      * which is attacker-controlled behind a permissive web server config; only the path and
      * query are taken from the request, and both are passed through `esc_url_raw()`.
      *
+     * @param  Config|null $config Instance configuration, so its per-taxonomy term
+     *                             parameters are stripped along with the fixed ones.
      * @return string
      */
-    public static function current_url(): string
+    public static function current_url(?Config $config = null): string
     {
         $request_uri = isset($_SERVER['REQUEST_URI'])
             ? esc_url_raw(wp_unslash((string) $_SERVER['REQUEST_URI']))
@@ -196,7 +247,7 @@ final class UrlState
         // so it is appended to the bare origin rather than to home_url()'s own path.
         $url = self::origin() . '/' . ltrim($request_uri, '/');
 
-        return (string) remove_query_arg(self::params(), $url);
+        return (string) remove_query_arg(self::params($config), $url);
     }
 
     /**
@@ -208,10 +259,12 @@ final class UrlState
      * only ever used to build `href` attributes, but an unchecked value would let a
      * crafted request produce off-site links inside this site's own markup.
      *
-     * @param  string $url Raw value from the request.
+     * @param  string      $url    Raw value from the request.
+     * @param  Config|null $config Instance configuration, so its per-taxonomy term
+     *                             parameters are stripped along with the fixed ones.
      * @return string
      */
-    public static function base_from_client(string $url): string
+    public static function base_from_client(string $url, ?Config $config = null): string
     {
         $url = esc_url_raw(trim($url));
 
@@ -235,7 +288,7 @@ final class UrlState
             . ('' !== ($parts['path'] ?? '') ? '/' . ltrim((string) $parts['path'], '/') : '/')
             . (isset($parts['query']) && '' !== $parts['query'] ? '?' . $parts['query'] : '');
 
-        return (string) remove_query_arg(self::params(), $rebuilt);
+        return (string) remove_query_arg(self::params($config), $rebuilt);
     }
 
     /**

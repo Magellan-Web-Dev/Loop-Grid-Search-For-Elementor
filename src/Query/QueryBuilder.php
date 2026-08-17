@@ -12,11 +12,12 @@ use LoopGridSearch\Support\Criteria;
 /**
  * Translates a {@see Config} + {@see Criteria} pair into WP_Query arguments and runs them.
  *
- * All three filters combine with AND, exactly as the brief describes:
+ * Every filter combines with AND, exactly as the brief describes:
  *
  *     ( post title LIKE keyword OR meta field LIKE keyword )   ← KeywordSearch (posts_clauses)
  *     AND published in the selected month/year                 ← date_query
  *     AND has the selected term                                ← tax_query
+ *     AND has the selected term of the next taxonomy           ← tax_query (one clause each)
  *
  * This class produces no output and mutates no globals; it is pure argument assembly plus
  * the single WP_Query execution, which keeps it trivially testable.
@@ -76,14 +77,26 @@ final class QueryBuilder
             ];
         }
 
-        if ($criteria->has_term() && '' !== $config->taxonomy()) {
-            $args['tax_query'] = [
-                [
-                    'taxonomy' => $config->taxonomy(),
-                    'field'    => 'term_id',
-                    'terms'    => [$criteria->term_id()],
-                ],
+        // One clause per taxonomy dropdown that has a selection, AND-ed together: choosing a
+        // category and a tag narrows to posts carrying both, which is what a visitor reading
+        // two dropdowns side by side expects. Criteria has already verified every term
+        // against its own taxonomy and dropped anything the instance does not filter on.
+        $tax_query = [];
+
+        foreach ($criteria->terms() as $taxonomy => $term_id) {
+            $tax_query[] = [
+                'taxonomy' => $taxonomy,
+                'field'    => 'term_id',
+                'terms'    => [$term_id],
             ];
+        }
+
+        if ([] !== $tax_query) {
+            // Explicit, even though AND is WP_Query's default, because the difference matters
+            // enough here to be visible to anyone reading a query log.
+            $tax_query['relation'] = 'AND';
+
+            $args['tax_query'] = $tax_query;
         }
 
         /**

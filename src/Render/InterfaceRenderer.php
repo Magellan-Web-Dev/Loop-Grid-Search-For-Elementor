@@ -80,7 +80,7 @@ final class InterfaceRenderer
         $criteria = $result['criteria'];
 
         $links = $config->seo_pagination()
-            ? new PageLinks(UrlState::current_url(), $criteria, $config, $instance_id)
+            ? new PageLinks(UrlState::current_url($config), $criteria, $config, $instance_id)
             : null;
 
         $results_html    = (new ResultsRenderer())->render($query, $config);

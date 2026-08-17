@@ -19,7 +19,8 @@
  *   .ajax-post-search__label          <label> element
  *   .ajax-post-search__keyword        keyword <input type="search">
  *   .ajax-post-search__date           Month / Year <select>
- *   .ajax-post-search__taxonomy       taxonomy term <select>
+ *   .ajax-post-search__taxonomy       taxonomy term <select> — one per configured taxonomy,
+ *                                     each carrying data-lgs-taxonomy="<slug>"
  *   .ajax-post-search__sort           sort <select> (optional)
  *   .ajax-post-search__clear          Clear Filters <button>
  *   .ajax-post-search__results        results region (aria-busy toggles here)
@@ -94,6 +95,14 @@
 
 .ajax-post-search__item {
 	min-width: 0;
+	display: flex;
+}
+
+/* Elementor Loop Grid Template Styling */
+
+.ajax-post-search__item .e-loop-item {
+	width: 100%;
+	height: 100%;
 }
 
 /* Sensible narrow-viewport behaviour for the shortcode, which has no responsive controls.

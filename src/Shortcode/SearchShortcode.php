@@ -31,6 +31,14 @@ use LoopGridSearch\Support\Config;
  *       taxonomy="post_tag"
  *       posts_per_page="9"
  *       elementor_template_id="1234"]
+ *
+ * With two term dropdowns, relabelling the second one:
+ *
+ *   [ajax_post_search
+ *       post_type="resource"
+ *       taxonomies="resource_type,post_tag"
+ *       taxonomy_labels="post_tag:Topic"
+ *       taxonomy_all_labels="post_tag:All Topics"]
  */
 final class SearchShortcode
 {
@@ -61,7 +69,13 @@ final class SearchShortcode
         'search_in'             => 'search_columns',
         'search_columns'        => 'search_columns',
 
+        // Taxonomy filters. `taxonomy` is the original single-dropdown spelling and still
+        // names the first dropdown; `taxonomies` is a comma-separated list, appended after it,
+        // for a bar with more than one term dropdown.
         'taxonomy'              => 'taxonomy',
+        'taxonomies'            => 'taxonomies',
+        'taxonomy_terms_in_post_type' => 'taxonomy_terms_in_post_type',
+
         'posts_per_page'        => 'posts_per_page',
         'elementor_template_id' => 'template_id',
         'template_id'           => 'template_id',
@@ -87,12 +101,23 @@ final class SearchShortcode
         'keyword_placeholder'   => 'keyword_placeholder',
         'date_label'            => 'date_label',
         'date_all_label'        => 'date_all_label',
+        // Labels for the first dropdown. Every further dropdown is labelled through the two
+        // per-taxonomy attributes below, or from the taxonomy's own registered names.
         'taxonomy_label'        => 'taxonomy_label',
         'taxonomy_all_label'    => 'taxonomy_all_label',
+        'taxonomy_labels'       => 'taxonomy_labels',
+        'taxonomy_all_labels'   => 'taxonomy_all_labels',
         'sort_label'            => 'sort_label',
         'clear_label'           => 'clear_label',
         'no_results_text'       => 'no_results_text',
     ];
+
+    /**
+     * Config keys whose attribute value is a `slug:label|slug:label` map rather than a scalar.
+     *
+     * @var list<string>
+     */
+    private const LABEL_MAP_KEYS = ['taxonomy_labels', 'taxonomy_all_labels'];
 
     /**
      * Registers both shortcode tags.
@@ -144,10 +169,44 @@ final class SearchShortcode
 
         foreach (self::ATTRIBUTE_MAP as $attribute => $config_key) {
             if (isset($atts[$attribute]) && null !== $atts[$attribute]) {
-                $mapped[$config_key] = $atts[$attribute];
+                $mapped[$config_key] = in_array($config_key, self::LABEL_MAP_KEYS, true)
+                    ? $this->parse_label_map((string) $atts[$attribute])
+                    : $atts[$attribute];
             }
         }
 
         return $mapped;
+    }
+
+    /**
+     * Parses a per-taxonomy label attribute into the slug => label map Config expects.
+     *
+     * Format: `taxonomy_labels="category:Section|post_tag:Topic"`. Pipe-separated rather than
+     * comma-separated because a label is prose and may well contain a comma; a taxonomy slug
+     * can contain neither a pipe nor a colon, so the first colon always ends the slug.
+     *
+     * @param  string $value
+     * @return array<string, string>
+     */
+    private function parse_label_map(string $value): array
+    {
+        $map = [];
+
+        foreach (explode('|', $value) as $pair) {
+            if (!str_contains($pair, ':')) {
+                continue;
+            }
+
+            [$taxonomy, $label] = explode(':', $pair, 2);
+
+            $taxonomy = trim($taxonomy);
+            $label    = trim($label);
+
+            if ('' !== $taxonomy && '' !== $label) {
+                $map[$taxonomy] = $label;
+            }
+        }
+
+        return $map;
     }
 }

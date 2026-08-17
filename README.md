@@ -41,8 +41,8 @@ One interface with four controls and an AJAX-updated result grid:
 |---|---|
 | **Keyword** | Live search, debounced ~400 ms, Enter searches immediately. Matches **any combination** of post title / excerpt / content **OR** any number of custom fields — all OR-ed together. Post Title is on by default. |
 | **Month / Year** | Built from the dates that actually exist for the selected post type. Nothing is hard-coded. Newest month first. |
-| **Taxonomy term** | Any public taxonomy — `post_tag` by default, or a custom one such as `resource_type`. |
-| **Clear Filters** | Resets keyword, date, term, sort and pagination, then reloads the unfiltered first page. |
+| **Taxonomy term** | Any public taxonomy — `post_tag` by default, or a custom one such as `resource_type`. Add as many dropdowns as you need (Category *and* Tag), and each lists only the terms the queried post type actually uses. |
+| **Clear Filters** | Resets keyword, date, every term, sort and pagination, then reloads the unfiltered first page. |
 | **Sort** *(optional)* | Newest / Oldest / Title A–Z / Title Z–A. Off by default. |
 | **Pagination** | Previous / Next, with or without numbered pages. Button text is configurable and the number list truncates to a sliding window so it never runs off the page. |
 
@@ -54,7 +54,7 @@ The page never reloads — for searching, filtering, clearing, sorting or paging
 
 1. Activate the plugin.
 2. Edit a page with Elementor, search the widget panel for **Loop Grid Search**, and drag it in.
-3. Set **Post Type**, **Also Search Custom Field** (default `excerpt`), and **Taxonomy** (default `post_tag`).
+3. Set **Post Type**, **Also Search Custom Field** (default `excerpt`), and **Taxonomy** (default `post_tag`) — plus a row under **More Taxonomy Filters** for each additional term dropdown you want.
 4. Optionally pick a **Result Template** under *Content ▸ Results* to render each card with Elementor.
 5. Publish.
 
@@ -99,7 +99,32 @@ If no ACF fields are detected, the control says so and points you at **Additiona
 
 > **ACF is not required at query time.** It is used only to *discover* field names for this picker. The search itself reads post meta directly with `$wpdb`, so a site with no ACF works fine — type the meta keys by hand.
 
-**Content ▸ Filters** — visibility toggles and labels for the Month/Year filter, the taxonomy filter, the optional sort dropdown, and the Clear button.
+**Content ▸ Filters** — visibility toggles and labels for the Month/Year filter, the taxonomy filters, the optional sort dropdown, and the Clear button. The taxonomy half of that section:
+
+| Control | Type | Default | Notes |
+|---|---|---|---|
+| Show Taxonomy Filter | Toggle | On | Off hides every taxonomy dropdown. |
+| Taxonomy | Select | Tag | Any public taxonomy. Each option reads `Singular (slug) — Post Types`, so a taxonomy that has nothing to do with the post type above is visible as such while choosing. |
+| Taxonomy Label | Text | — | Empty uses the taxonomy's own registered name — `Tag`, `Category`, `Resource Type`. |
+| "All Terms" Option Text | Text | — | Empty uses `All` + the plural name, e.g. **All Categories**. |
+| **Only Terms Used By This Post Type** | Switcher | On | Lists only terms that a published post of the selected post type actually has. See [Scoping terms to the post type](#scoping-terms-to-the-post-type). |
+| **More Taxonomy Filters** | Repeater | — | One extra dropdown per row, each with its own Taxonomy, Label and "All Terms" text. See [Several taxonomy dropdowns](#several-taxonomy-dropdowns). |
+
+#### Scoping terms to the post type
+
+WordPress counts terms per *taxonomy*, not per post type. When `category` is shared between `post` and `resource`, a category used only by blog posts still passes `hide_empty` and still appears in a dropdown that queries resources — where selecting it can only ever return nothing.
+
+**Only Terms Used By This Post Type** resolves the terms that a published post of the queried post type genuinely carries and offers only those. Leave it on unless you have a reason not to: for a taxonomy used by a single post type the list is identical either way, and for a shared one it removes options that are dead ends.
+
+A dropdown left with no terms at all is not rendered — an empty select whose only entry is "All Categories" is worse than no select.
+
+> Scoping is by post type, not by the visitor's current filters. The options do not re-narrow as a keyword or another dropdown is used; a term that returns nothing *in combination* with the other filters is still listed.
+
+#### Several taxonomy dropdowns
+
+The **Taxonomy** control above is the first dropdown; every **More Taxonomy Filters** row adds another, in panel order. A resource library can therefore filter by Resource Type *and* Topic side by side.
+
+Selections narrow together — choosing a category and a tag returns only posts carrying both — and each dropdown owns its own query parameter, so the combination survives a reload or a shared link. Rows repeating a taxonomy already in use, or left with no taxonomy chosen, are ignored. Ten dropdowns is the hard ceiling.
 
 **Content ▸ Results**
 
@@ -173,7 +198,9 @@ Both list attributes accept a single value too, so the original one-field form s
 | `post_type` | `post` | Any public post type. |
 | `search_in` | `post_title` | Comma-separated built-in fields: `post_title`, `post_excerpt`, `post_content`. (`search_columns` is a synonym.) |
 | `acf_search_field` | `excerpt` | Comma-separated meta keys OR-ed with the fields above. Empty = built-in fields only. (`meta_search_field` and `search_meta_keys` are synonyms.) |
-| `taxonomy` | `post_tag` | Any public taxonomy. Empty disables the term filter. |
+| `taxonomy` | `post_tag` | Any public taxonomy — the first term dropdown. Empty disables the term filter entirely. |
+| `taxonomies` | — | Comma-separated taxonomies for **additional** term dropdowns, appended after `taxonomy`. `taxonomies="resource_type,post_tag"` renders two. Unknown or repeated entries are dropped; ten dropdowns is the ceiling. |
+| `taxonomy_terms_in_post_type` | `yes` | Offer only terms that a published post of `post_type` actually has. `no` reverts to WordPress's per-taxonomy `hide_empty`, which keeps terms used only by other post types. See [Scoping terms to the post type](#scoping-terms-to-the-post-type). |
 | `posts_per_page` | `9` | Clamped to 1–100. |
 | `elementor_template_id` | — | Elementor template post ID. Omit to use the PHP card. (`template_id` is a synonym.) |
 | `orderby` | `date` | `date`, `title`, `modified`, `menu_order`, `ID`. |
@@ -195,8 +222,10 @@ Both list attributes accept a single value too, so the original one-field form s
 | `keyword_placeholder` | Search… | |
 | `date_label` | Date | |
 | `date_all_label` | All Dates | |
-| `taxonomy_label` | Tag | |
-| `taxonomy_all_label` | All Tags | |
+| `taxonomy_label` | the taxonomy's own name | Label for the first dropdown. Empty uses the registered singular name. |
+| `taxonomy_all_label` | `All` + the plural name | "All terms" text for the first dropdown. |
+| `taxonomy_labels` | — | Labels for the other dropdowns: `taxonomy_labels="post_tag:Topic\|category:Section"`. Pipe-separated, because a label may contain a comma. |
+| `taxonomy_all_labels` | — | Same format, for their "all terms" text: `taxonomy_all_labels="post_tag:All Topics"`. |
 | `sort_label` | Sort By | |
 | `clear_label` | Clear Filters | |
 | `no_results_text` | No results found matching your search. | |
@@ -279,7 +308,7 @@ See [`src/Query/KeywordSearch.php`](src/Query/KeywordSearch.php) and [`src/Suppo
 All filters compose with `AND`:
 
 ```
-Keyword: solar     Month: August 2026     Tag: Commercial
+Keyword: solar     Month: August 2026     Tag: Commercial     Category: Case Studies
 ```
 
 becomes
@@ -287,11 +316,14 @@ becomes
 ```sql
 (   wp_posts.post_title LIKE '%solar%'
  OR EXISTS ( postmeta row: meta_key='excerpt' AND meta_value LIKE '%solar%' ) )
-AND  post_date is in 2026-08                    -- WP_Query date_query
-AND  post has term "Commercial" in post_tag     -- WP_Query tax_query
+AND  post_date is in 2026-08                      -- WP_Query date_query
+AND  post has term "Commercial" in post_tag       -- WP_Query tax_query
+AND  post has term "Case Studies" in category     -- WP_Query tax_query
 ```
 
-Changing **any** filter resets pagination to page 1. Changing the **page** preserves the keyword, month/year, term and sort.
+Each taxonomy dropdown contributes its own `tax_query` clause, so two selections narrow the results rather than widening them: a post must carry the chosen term in **every** dropdown the visitor has used.
+
+Changing **any** filter resets pagination to page 1. Changing the **page** preserves the keyword, month/year, every selected term and the sort.
 
 ---
 
@@ -299,18 +331,18 @@ Changing **any** filter resets pagination to page 1. Changing the **page** prese
 
 All three are configuration, in one place per instance.
 
-**Widget:** *Content ▸ Query ▸ Post Type*, *Content ▸ Keyword Search ▸ Search In / Also Search Custom Fields / Additional Meta Keys*, *Content ▸ Filters ▸ Taxonomy*.
+**Widget:** *Content ▸ Query ▸ Post Type*, *Content ▸ Keyword Search ▸ Search In / Also Search Custom Fields / Additional Meta Keys*, *Content ▸ Filters ▸ Taxonomy* (plus *More Taxonomy Filters* for further dropdowns).
 
 **Shortcode:**
 
 ```
-[ajax_post_search post_type="resource" acf_search_field="summary,body" taxonomy="resource_type"]
+[ajax_post_search post_type="resource" acf_search_field="summary,body" taxonomies="resource_type,post_tag"]
 ```
 
 Nothing else has to change:
 
 - The **Month / Year** options are generated from the new post type's actual publish dates.
-- The **taxonomy dropdown** is generated from the new taxonomy's terms.
+- Each **taxonomy dropdown** is generated from that taxonomy's terms — narrowed, by default, to the ones the new post type actually uses, and dropped entirely if it uses none.
 - The **keyword search** binds the new meta keys as query parameters.
 - The **ACF field picker** re-discovers fields and promotes the ones bound to the new post type to the top of the list.
 - The **built-in card** tries each searchable meta key in order and shows the first one with a value as its summary, falling back to the WordPress excerpt.
@@ -375,10 +407,12 @@ Filters ride along in the same URL, so a filtered view is shareable as well:
 | `lgs_page` | 1-based page number — omitted on page 1, so the first page has exactly one address |
 | `lgs_q` | keyword |
 | `lgs_date` | `YYYY-MM` month selection |
-| `lgs_term` | taxonomy term ID |
+| `lgs_term_<taxonomy>` | term ID chosen in that taxonomy's dropdown — `lgs_term_category=4&lgs_term_post_tag=9` |
 | `lgs_sort` | sort preset key |
 
-All five are prefixed and none is a registered WordPress query var. In particular `lgs_page` is deliberately **not** `paged`, which would make WordPress treat the request as a paged archive and produce 404s and canonical redirects on a singular page. Query parameters this plugin does not own are preserved untouched when the URL is rewritten.
+Term parameters carry the taxonomy slug because an instance may render several dropdowns, which one `lgs_term` cannot describe; each parameter also keeps its meaning if the dropdowns are later reordered. The bare `lgs_term` is still **read**, as the first configured taxonomy's term, so links shared or indexed before this scheme existed keep resolving to the same results — it is simply never written any more.
+
+All of them are prefixed and none is a registered WordPress query var. In particular `lgs_page` is deliberately **not** `paged`, which would make WordPress treat the request as a paged archive and produce 404s and canonical redirects on a singular page. Query parameters this plugin does not own are preserved untouched when the URL is rewritten.
 
 **Two searches on one page.** One set of query parameters cannot describe two instances, so they would page in lockstep on reload. Switch **SEO-Friendly Page Links** off (or pass `seo_pagination="no"`) on the secondary one: it goes back to `<button>` controls and stops reading or writing the URL, while the primary instance keeps its crawlable links.
 
@@ -578,7 +612,7 @@ Both are viable. admin-ajax is the better fit here:
 | `nonce` | `lgs_search` nonce |
 | `keyword` | Free text; sanitised and length-capped at 200 characters |
 | `date` | `YYYY-MM`, or empty |
-| `term` | Term ID, or empty |
+| `terms[<taxonomy>]` | Term ID for that dropdown, or empty. One entry per taxonomy dropdown. The older flat `term` is still accepted and names the first configured taxonomy |
 | `sort` | `newest` \| `oldest` \| `title_asc` \| `title_desc`, or empty |
 | `paged` | 1-based page number |
 | `config[…]` | The server-signed instance configuration, echoed back verbatim |
@@ -635,7 +669,7 @@ After the signature verifies, every value is **re-validated against the live Wor
 |---|---|
 | `keyword` | `sanitize_text_field()`, whitespace collapsed, capped at 200 chars and 10 terms; `$wpdb->esc_like()` + `$wpdb->prepare()` |
 | `date` | Must match `^\d{4}-\d{2}$` exactly, year 1900–2200, month 1–12; anything else means "All Dates" |
-| `term` | `absint()`, then verified to be a real term **in the configured taxonomy** |
+| `terms[…]` | Read against the instance's **own** taxonomy list, not the request's: an entry naming a taxonomy this instance does not filter on is ignored outright. Each value is `absint()`-ed, then verified to be a real term **in that taxonomy** |
 | `paged` | `absint()`, floored at 1, then clamped to the real page count |
 | `sort` | Restricted to a fixed four-entry preset map; no arbitrary `orderby` can reach `WP_Query` |
 
@@ -717,7 +751,8 @@ The server always returns rendered markup — the empty state is a real message,
 .ajax-post-search__label          <label> element
 .ajax-post-search__keyword        keyword <input type="search">
 .ajax-post-search__date           Month / Year <select>
-.ajax-post-search__taxonomy       taxonomy term <select>
+.ajax-post-search__taxonomy       taxonomy term <select> — one per configured taxonomy,
+                                  each with data-lgs-taxonomy="<slug>" for targeting one
 .ajax-post-search__sort           sort <select> (optional)
 .ajax-post-search__clear          Clear Filters <button>
 .ajax-post-search__results        results region (aria-busy toggles here)
@@ -755,7 +790,7 @@ There are **no inline `style` attributes**. Per-instance defaults are emitted in
 | `lgs_keyword_where` | `$where, $terms, $columns, $meta_keys` | Replace the generated keyword SQL. **Callbacks must escape and prepare their own values.** |
 | `lgs_search_field_options` | `$options, $post_type` | Add or remove fields in the widget's ACF search-field picker. |
 | `lgs_date_options` | `$options, $post_type` | Alter the Month / Year dropdown options. |
-| `lgs_taxonomy_options` | `$options, $taxonomy, $post_type` | Alter the term dropdown options. |
+| `lgs_taxonomy_options` | `$options, $taxonomy, $post_type, $limit_to_post_type` | Alter one term dropdown's options. Called once per taxonomy; `$limit_to_post_type` says whether the list was already scoped to the post type. |
 | `lgs_result_card_template` | `$template, $config` | Point the PHP card at any absolute path. |
 | `lgs_results_html` | `$html, $query, $config` | Wrap or replace the rendered result list. |
 | `lgs_no_results_html` | `$html, $config` | Replace the empty-state markup. |
@@ -774,24 +809,18 @@ add_filter( 'lgs_search_field_options', function ( array $options, string $post_
 }, 10, 2 );
 ```
 
-Example — narrow the term dropdown to terms that actually have posts in the queried post type:
+Example — keep an internal term out of one dropdown. (Narrowing the list to terms the post type actually uses no longer needs a filter — that is what **Only Terms Used By This Post Type** does, and `$limit_to_post_type` tells you whether it already ran.)
 
 ```php
-add_filter( 'lgs_taxonomy_options', function ( array $options, string $taxonomy, string $post_type ): array {
+add_filter( 'lgs_taxonomy_options', function ( array $options, string $taxonomy ): array {
     if ( 'resource_type' !== $taxonomy ) {
         return $options;
     }
 
-    return array_filter( $options, static function ( $name, $term_id ) use ( $taxonomy, $post_type ) {
-        return (bool) get_posts( [
-            'post_type'      => $post_type,
-            'posts_per_page' => 1,
-            'fields'         => 'ids',
-            'no_found_rows'  => true,
-            'tax_query'      => [ [ 'taxonomy' => $taxonomy, 'terms' => [ (int) $term_id ] ] ],
-        ] );
-    }, ARRAY_FILTER_USE_BOTH );
-}, 10, 3 );
+    unset( $options[ get_term_by( 'slug', 'internal', $taxonomy )->term_id ?? 0 ] );
+
+    return $options;
+}, 10, 2 );
 ```
 
 ---
@@ -804,7 +833,7 @@ add_filter( 'lgs_taxonomy_options', function ( array $options, string $taxonomy,
 
 **The Month / Year list costs one lean query.** A single `SELECT DISTINCT YEAR(post_date), MONTH(post_date)` over `wp_posts` — the same approach WordPress core takes in `wp_get_archives()`. It is covered by core's `type_status_date` composite index, so MySQL can satisfy it from the index without touching row data. No post objects are loaded, and the result is memoised per request so rendering the filter bar never repeats it.
 
-**Term options come from the term cache.** `get_terms()` with `fields => 'id=>name'` — no post objects.
+**Term options come from the term cache.** `get_terms()` with `fields => 'id=>name'` — no post objects. Scoping a dropdown to the post type adds one `SELECT DISTINCT tt.term_id` over the relationship tables, joined to `wp_posts` only to constrain the post type and status; the term objects themselves still come from WordPress's cache, so every `term_name` filter (WPML, Polylang) still runs. Results are memoised per taxonomy, post type and scope for the request.
 
 **Post meta and term caches are primed in bulk.** `update_post_meta_cache` and `update_post_term_cache` are on, so the card or loop template resolves thumbnails, ACF values and taxonomy terms from two priming queries rather than per-post lookups.
 
@@ -818,13 +847,15 @@ add_filter( 'lgs_taxonomy_options', function ( array $options, string $taxonomy,
 
 **Full-page caching and nonces.** The `lgs_search` nonce is baked into cached HTML and is valid for 24 hours. If a page is cached for longer than that, a visitor may load stale HTML whose nonce has expired; the endpoint then returns `lgs_invalid_nonce` and the interface shows "Your session has expired. Please reload the page and try again." Keep the page cache TTL under 24 hours, or exclude pages carrying a search instance from full-page caching.
 
-**Full-page caching and `?lgs_page=`.** Because pages of results are now distinct URLs, a page cache must treat them as distinct entries. Most do by default, but several are configured to strip or ignore unrecognised query parameters — which would serve page 1's HTML at `?lgs_page=3`. If you use a page cache or a CDN, add `lgs_page`, `lgs_q`, `lgs_date`, `lgs_term` and `lgs_sort` to its list of cache-varying parameters, or exclude pages carrying a search instance. Visitors with JavaScript are unaffected either way — only the crawler's and the shared-link view is.
+**Full-page caching and `?lgs_page=`.** Because pages of results are now distinct URLs, a page cache must treat them as distinct entries. Most do by default, but several are configured to strip or ignore unrecognised query parameters — which would serve page 1's HTML at `?lgs_page=3`. If you use a page cache or a CDN, add `lgs_page`, `lgs_q`, `lgs_date`, `lgs_sort` and every `lgs_term_<taxonomy>` parameter to its list of cache-varying parameters, or exclude pages carrying a search instance. Visitors with JavaScript are unaffected either way — only the crawler's and the shared-link view is.
 
 **One URL, one instance.** The query parameters are page-global, so two search instances on the same page would both honour `?lgs_page=2` on reload. Switch **SEO-Friendly Page Links** off on the secondary instance; see [SEO-friendly pagination](#seo-friendly-pagination).
 
 **Canonical tags are your SEO plugin's job.** The plugin makes each page of results reachable and indexable; it does not emit `<link rel="canonical">`, `robots` directives or a paginated-series title. If your SEO plugin writes a canonical URL that drops the query string, every page of results will canonicalise back to page 1 and only page 1 will be indexed. Configure the plugin to preserve `lgs_page` (or to treat it as a pagination parameter) if you want the later pages indexed on their own.
 
-**`hide_empty` is per-taxonomy, not per-post-type.** WordPress term counts are not split by post type. When a taxonomy is shared across post types, a term whose only posts belong to a *different* post type still appears in the dropdown (and yields no results). That is a WordPress data-model limitation; use `lgs_taxonomy_options` to narrow the list — see the example above.
+**`hide_empty` is per-taxonomy, not per-post-type.** WordPress term counts are not split by post type, so a term whose only posts belong to a *different* post type passes `hide_empty`. **Only Terms Used By This Post Type** (on by default, `taxonomy_terms_in_post_type="no"` to disable) works around that with its own relationship query; turning it off restores WordPress's behaviour, and `lgs_taxonomy_options` can narrow either list further.
+
+**Term lists are scoped by post type, not by the other filters.** The options in each dropdown do not re-narrow as the visitor types a keyword or picks a term in a neighbouring dropdown, so a combination that returns nothing is still selectable. Dependent filtering would mean re-rendering the filter bar on every response, which would cost the keyword field its focus and caret position mid-typing.
 
 **Elementor widget assets inside a loop template.** Widgets that need their own CSS/JS are covered because page 1 renders server-side during the normal page lifecycle, which lets Elementor's conditional asset loader enqueue them. A widget that appears *only* on later pages (an alternate template, a conditional element) could arrive without its assets. If you hit that, either keep the loop template's widget set uniform or disable Elementor's *Improved Asset Loading* experiment.
 
@@ -860,6 +891,15 @@ GitHub archives extract into a version-stamped folder, so an `upgrader_post_inst
 ---
 
 ## Changelog
+
+### 1.8.0
+- **Term dropdowns list only terms the queried post type actually uses.** New **Only Terms Used By This Post Type** switcher (`taxonomy_terms_in_post_type`), **on by default**. WordPress counts terms per taxonomy rather than per post type, so a shared taxonomy previously offered terms whose only posts belonged to another post type — options that could only ever return nothing. A dropdown left with no usable terms is not rendered at all.
+- **More than one taxonomy dropdown per instance.** New **More Taxonomy Filters** repeater in the widget (`taxonomies="resource_type,post_tag"` for the shortcode), each row with its own taxonomy, label and "all terms" text. Selections narrow together: a category *and* a tag returns only posts carrying both. Ten dropdowns is the ceiling.
+- Term state moved from one `lgs_term` parameter to one `lgs_term_<taxonomy>` per dropdown, so a multi-dropdown view is shareable and survives a reload. The bare `lgs_term` is still **read** as the first taxonomy's term, so previously shared or indexed links keep resolving; it is no longer written. AJAX requests likewise send `terms[<taxonomy>]`, with the flat `term` still accepted.
+- Taxonomy labels left empty now fall back to the taxonomy's own registered names — `Category` / `All Categories` — instead of the hard-coded "Tag" / "All Tags". Existing widgets and shortcodes that set a label explicitly are unaffected.
+- The widget's Taxonomy dropdown lists the post types each taxonomy is registered for, so pairing it with an unrelated Post Type is visible while choosing rather than after publishing.
+- `lgs_taxonomy_options` gains a fourth argument, `$limit_to_post_type`, and is called once per taxonomy dropdown.
+- Because the taxonomy list joins the signed configuration payload, HTML cached from an earlier version will fail signature verification once. Flush your page cache after updating; an un-flushed page shows "This search could not be verified. Please reload the page and try again." until it is reloaded.
 
 ### 1.7.0
 - **SEO-friendly pagination.** Page controls are now real `<a href="?lgs_page=2">` links instead of `<button>` elements with the page number hidden in a data attribute. Search engines can crawl the whole result set, and loading such a URL renders that page server-side.

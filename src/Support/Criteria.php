@@ -16,8 +16,8 @@ if (!defined('ABSPATH')) exit;
  * Nothing in this class is ever interpolated into SQL:
  *   • keyword  → bound with $wpdb->prepare() + $wpdb->esc_like() in KeywordSearch
  *   • year/month → passed to WP_Query's date_query, which builds its own SQL
- *   • term_id  → verified to be a real term in the configured taxonomy, then passed
- *                to tax_query as an integer
+ *   • terms    → each verified to be a real term in one of the *configured* taxonomies,
+ *                then passed to tax_query as an integer
  *   • page     → absint, floor of 1
  */
 final class Criteria
@@ -42,18 +42,20 @@ final class Criteria
     ];
 
     /**
-     * @param string $keyword Trimmed search phrase ('' when not searching).
-     * @param int    $year    Four-digit year, or 0 for "all dates".
-     * @param int    $month   Month number 1–12, or 0 for "all dates".
-     * @param int    $term_id Verified term ID, or 0 for "all terms".
-     * @param int    $page    1-based page number.
-     * @param string $sort    Key of {@see SORT_PRESETS}, or '' to use the Config default.
+     * @param string             $keyword Trimmed search phrase ('' when not searching).
+     * @param int                $year    Four-digit year, or 0 for "all dates".
+     * @param int                $month   Month number 1–12, or 0 for "all dates".
+     * @param array<string, int> $terms   Verified term ID per taxonomy slug, in the
+     *                                    instance's configured taxonomy order. A taxonomy
+     *                                    with no selection is absent, never present as 0.
+     * @param int                $page    1-based page number.
+     * @param string             $sort    Key of {@see SORT_PRESETS}, or '' to use the Config default.
      */
     private function __construct(
         private readonly string $keyword,
         private readonly int $year,
         private readonly int $month,
-        private readonly int $term_id,
+        private readonly array $terms,
         private readonly int $page,
         private readonly string $sort,
     ) {}
@@ -65,7 +67,7 @@ final class Criteria
      */
     public static function initial(): self
     {
-        return new self('', 0, 0, 0, 1, '');
+        return new self('', 0, 0, [], 1, '');
     }
 
     /**
@@ -73,7 +75,7 @@ final class Criteria
      *
      * @param  array<string, mixed> $raw    Unslashed request data ($_POST).
      * @param  Config               $config The validated instance configuration, used to
-     *                                      scope term validation to the right taxonomy.
+     *                                      scope term validation to the right taxonomies.
      * @return self
      */
     public static function from_request(array $raw, Config $config): self
@@ -84,7 +86,7 @@ final class Criteria
             self::parse_keyword($raw['keyword'] ?? ''),
             $date['year'],
             $date['month'],
-            self::parse_term($raw['term'] ?? 0, $config->taxonomy()),
+            self::parse_terms($raw, $config),
             max(1, absint(is_scalar($raw['paged'] ?? 1) ? $raw['paged'] ?? 1 : 1)),
             self::parse_sort($raw['sort'] ?? '')
         );
@@ -141,16 +143,57 @@ final class Criteria
         return $this->year > 0 && $this->month > 0;
     }
 
-    /** @return int Verified term ID, or 0 for "all terms". */
-    public function term_id(): int
+    /**
+     * Every selected term, keyed by taxonomy slug, in configured dropdown order.
+     *
+     * @return array<string, int>
+     */
+    public function terms(): array
     {
-        return $this->term_id;
+        return $this->terms;
     }
 
-    /** @return bool */
+    /**
+     * Returns the verified term ID selected in one taxonomy, or 0 for "all terms".
+     *
+     * @param  string $taxonomy
+     * @return int
+     */
+    public function term_for(string $taxonomy): int
+    {
+        return (int) ($this->terms[$taxonomy] ?? 0);
+    }
+
+    /**
+     * First selected term ID across all taxonomies, or 0 when nothing is selected.
+     *
+     * Kept under the original single-term name for templates and filter callbacks written
+     * against it; {@see term_for()} is the one to use when several dropdowns are in play.
+     *
+     * @return int
+     */
+    public function term_id(): int
+    {
+        foreach ($this->terms as $term_id) {
+            return $term_id;
+        }
+
+        return 0;
+    }
+
+    /** @return bool True when at least one taxonomy dropdown has a term selected. */
     public function has_term(): bool
     {
-        return $this->term_id > 0;
+        return [] !== $this->terms;
+    }
+
+    /**
+     * @param  string $taxonomy
+     * @return bool True when this taxonomy's dropdown has a term selected.
+     */
+    public function has_term_in(string $taxonomy): bool
+    {
+        return isset($this->terms[$taxonomy]);
     }
 
     /** @return int 1-based page number. */
@@ -190,7 +233,7 @@ final class Criteria
      */
     public function with_page(int $page): self
     {
-        return new self($this->keyword, $this->year, $this->month, $this->term_id, max(1, $page), $this->sort);
+        return new self($this->keyword, $this->year, $this->month, $this->terms, max(1, $page), $this->sort);
     }
 
     /**
@@ -277,6 +320,52 @@ final class Criteria
         }
 
         return ['year' => $year, 'month' => $month];
+    }
+
+    /**
+     * Resolves the selected term for each taxonomy the instance is configured with.
+     *
+     * Two request spellings are accepted:
+     *
+     *   terms[<taxonomy>] = <term id>   one entry per dropdown (what the script sends)
+     *   term              = <term id>   the original single-dropdown spelling, which names
+     *                                   the first configured taxonomy
+     *
+     * The *configured* taxonomy list drives the loop, not the request, so a request naming a
+     * taxonomy this instance does not filter on is ignored outright rather than reaching
+     * tax_query — the same posture Config takes for the query scope. The result is keyed in
+     * configured order, which is what makes the URL this produces deterministic.
+     *
+     * @param  array<string, mixed> $raw
+     * @param  Config               $config
+     * @return array<string, int>
+     */
+    private static function parse_terms(array $raw, Config $config): array
+    {
+        $taxonomies = $config->taxonomies();
+        $requested  = [];
+
+        if (isset($raw['terms']) && is_array($raw['terms'])) {
+            foreach ($raw['terms'] as $taxonomy => $value) {
+                $requested[sanitize_key((string) $taxonomy)] = $value;
+            }
+        }
+
+        if (isset($raw['term']) && [] !== $taxonomies && !isset($requested[$taxonomies[0]])) {
+            $requested[$taxonomies[0]] = $raw['term'];
+        }
+
+        $terms = [];
+
+        foreach ($taxonomies as $taxonomy) {
+            $term_id = self::parse_term($requested[$taxonomy] ?? 0, $taxonomy);
+
+            if ($term_id > 0) {
+                $terms[$taxonomy] = $term_id;
+            }
+        }
+
+        return $terms;
     }
 
     /**

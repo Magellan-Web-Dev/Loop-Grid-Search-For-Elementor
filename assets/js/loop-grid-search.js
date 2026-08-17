@@ -33,6 +33,11 @@
  *   • popstate re-reads the URL, syncs the form controls to it and re-runs the search,
  *     so Back and Forward move through the pages the visitor actually saw.
  *
+ * An instance may render several taxonomy dropdowns, so each owns its own query parameter —
+ * `lgs_term_category`, `lgs_term_post_tag` — keyed by the `data-lgs-taxonomy` attribute the
+ * server stamps on its select. The older bare `lgs_term` is still read (as the first
+ * taxonomy's term) so URLs shared before that change keep working; it is never written.
+ *
  * All of that is skipped when the instance has SEO pagination switched off, in which case
  * the server emits the old button markup and the URL is never touched.
  *
@@ -65,8 +70,16 @@
 		keyword: 'lgs_q',
 		date: 'lgs_date',
 		term: 'lgs_term',
+		termPrefix: 'lgs_term_',
 		sort: 'lgs_sort'
 	};
+
+	/**
+	 * Stem of the per-taxonomy term parameters: `lgs_term_category`, `lgs_term_post_tag`, …
+	 * One instance can carry several taxonomy dropdowns, so a single `lgs_term` cannot
+	 * describe its state. PHP owns the stem; the fallback covers a missing settings object.
+	 */
+	var TERM_PREFIX = PARAMS.termPrefix || 'lgs_term_';
 
 	/**
 	 * Whether this browser can be asked to rewrite the address bar without navigating.
@@ -97,7 +110,10 @@
 
 		this.keywordInput = root.querySelector( '.ajax-post-search__keyword' );
 		this.dateSelect = root.querySelector( '.ajax-post-search__date' );
-		this.taxonomySelect = root.querySelector( '.ajax-post-search__taxonomy' );
+		// One select per configured taxonomy, each tagged with the taxonomy it filters on.
+		this.taxonomySelects = Array.prototype.slice.call(
+			root.querySelectorAll( '.ajax-post-search__taxonomy[data-lgs-taxonomy]' )
+		);
 		this.sortSelect = root.querySelector( '.ajax-post-search__sort' );
 		this.clearButton = root.querySelector( '.ajax-post-search__clear' );
 		this.form = root.querySelector( '.ajax-post-search__filters' );
@@ -106,6 +122,11 @@
 		// config block, so there is nothing extra to print per instance.
 		this.usesUrlState = CAN_WRITE_URL && '1' === String( this.config.seo_pagination || '' );
 
+		// Every taxonomy this instance filters on, in configured order — read from the config
+		// rather than from the selects, because a dropdown whose taxonomy has no usable terms
+		// is not rendered at all. Its query parameter still has to be cleaned out of the URL.
+		this.taxonomies = String( this.config.taxonomies || '' ).split( ',' ).filter( Boolean );
+
 		// Current filter state. Seeded from the DOM so a server-rendered preselection (or a
 		// browser restoring form values on back-navigation) is respected. The page number
 		// comes from the wrapper, which the server stamps with the page it actually served
@@ -113,7 +134,8 @@
 		this.state = {
 			keyword: this.keywordInput ? this.keywordInput.value : '',
 			date: this.dateSelect ? this.dateSelect.value : '',
-			term: this.taxonomySelect ? this.taxonomySelect.value : '',
+			// Selected term per taxonomy slug, e.g. { category: '4', post_tag: '' }.
+			terms: this.readTermsFromSelects(),
 			sort: this.sortSelect ? this.sortSelect.value : '',
 			paged: readPage( root.getAttribute( 'data-lgs-current-page' ) )
 		};
@@ -178,7 +200,6 @@
 
 		[
 			[ this.dateSelect, 'date' ],
-			[ this.taxonomySelect, 'term' ],
 			[ this.sortSelect, 'sort' ]
 		].forEach( function ( pair ) {
 			var element = pair[ 0 ];
@@ -194,6 +215,14 @@
 				// Any filter change invalidates the current page position. The URL is
 				// replaced rather than pushed: a filter change is a correction to where
 				// the visitor already is, not a place to come Back to.
+				self.request( { resetPage: true, history: 'replace' } );
+			} );
+		} );
+
+		this.taxonomySelects.forEach( function ( select ) {
+			select.addEventListener( 'change', function () {
+				self.state.terms[ taxonomyOf( select ) ] = select.value;
+				self.cancelDebounce();
 				self.request( { resetPage: true, history: 'replace' } );
 			} );
 		} );
@@ -290,6 +319,21 @@
 	};
 
 	/**
+	 * Reads the current selection of every taxonomy dropdown into a slug-keyed map.
+	 *
+	 * @return {Object} Map of taxonomy slug to selected term ID (as a string; '' for none).
+	 */
+	LoopGridSearchInstance.prototype.readTermsFromSelects = function () {
+		var terms = {};
+
+		this.taxonomySelects.forEach( function ( select ) {
+			terms[ taxonomyOf( select ) ] = select.value;
+		} );
+
+		return terms;
+	};
+
+	/**
 	 * Resets every filter and reloads the unfiltered first page.
 	 *
 	 * @return {void}
@@ -303,9 +347,9 @@
 			this.dateSelect.value = '';
 		}
 
-		if ( this.taxonomySelect ) {
-			this.taxonomySelect.value = '';
-		}
+		this.taxonomySelects.forEach( function ( select ) {
+			select.value = '';
+		} );
 
 		if ( this.sortSelect ) {
 			// Back to the first option, which the server renders as the configured default
@@ -316,7 +360,7 @@
 		this.state = {
 			keyword: '',
 			date: '',
-			term: '',
+			terms: this.readTermsFromSelects(),
 			sort: this.sortSelect ? this.sortSelect.value : '',
 			paged: 1
 		};
@@ -345,8 +389,21 @@
 		}
 
 		this.state.date = setSelectValue( this.dateSelect, params.get( PARAMS.date ) );
-		this.state.term = setSelectValue( this.taxonomySelect, params.get( PARAMS.term ) );
 		this.state.sort = setSelectValue( this.sortSelect, params.get( PARAMS.sort ) );
+
+		this.taxonomySelects.forEach( function ( select ) {
+			var taxonomy = taxonomyOf( select );
+			var value = params.get( TERM_PREFIX + taxonomy );
+
+			// The bare `lgs_term` is the pre-multi-taxonomy spelling; PHP still reads it as the
+			// first *configured* taxonomy's term, so Back onto an older URL has to restore it
+			// here too — and against the same taxonomy PHP would pick.
+			if ( null === value && taxonomy === this.taxonomies[ 0 ] ) {
+				value = params.get( PARAMS.term );
+			}
+
+			this.state.terms[ taxonomy ] = setSelectValue( select, value );
+		}, this );
 	};
 
 	/**
@@ -377,7 +434,16 @@
 		var url = new window.URL( window.location.href );
 		var params = url.searchParams;
 
-		[ PARAMS.page, PARAMS.keyword, PARAMS.date, PARAMS.term, PARAMS.sort ].forEach( function ( name ) {
+		// PARAMS.term is cleared but never written: it is the legacy single-taxonomy spelling,
+		// still read by PHP so old links keep working, and dropping it here stops it lingering
+		// beside the per-taxonomy parameter that supersedes it.
+		var owned = [ PARAMS.page, PARAMS.keyword, PARAMS.date, PARAMS.term, PARAMS.sort ];
+
+		this.taxonomies.forEach( function ( taxonomy ) {
+			owned.push( TERM_PREFIX + taxonomy );
+		} );
+
+		owned.forEach( function ( name ) {
 			params.delete( name );
 		} );
 
@@ -389,9 +455,11 @@
 			params.set( PARAMS.date, this.state.date );
 		}
 
-		if ( this.state.term ) {
-			params.set( PARAMS.term, this.state.term );
-		}
+		Object.keys( this.state.terms ).forEach( function ( taxonomy ) {
+			if ( this.state.terms[ taxonomy ] ) {
+				params.set( TERM_PREFIX + taxonomy, this.state.terms[ taxonomy ] );
+			}
+		}, this );
 
 		// A sort that only restates the instance's default is left out, so the first
 		// interaction on a search with sorting enabled does not stamp `lgs_sort=newest`
@@ -522,9 +590,14 @@
 
 		body.set( 'keyword', this.state.keyword || '' );
 		body.set( 'date', this.state.date || '' );
-		body.set( 'term', this.state.term || '' );
 		body.set( 'sort', this.state.sort || '' );
 		body.set( 'paged', String( this.state.paged || 1 ) );
+
+		// One entry per taxonomy dropdown. PHP walks its *own* configured taxonomy list when
+		// reading these, so an entry it does not recognise is ignored rather than queried.
+		Object.keys( this.state.terms ).forEach( function ( taxonomy ) {
+			body.set( 'terms[' + taxonomy + ']', this.state.terms[ taxonomy ] || '' );
+		}, this );
 
 		if ( this.usesUrlState ) {
 			// admin-ajax.php has no idea which page this instance lives on, and it needs
@@ -799,9 +872,19 @@
 	}
 
 	/**
+	 * Returns the taxonomy slug a term dropdown filters on.
+	 *
+	 * @param {HTMLSelectElement} select
+	 * @return {string}
+	 */
+	function taxonomyOf( select ) {
+		return select.getAttribute( 'data-lgs-taxonomy' ) || '';
+	}
+
+	/**
 	 * Sets a select to a value, falling back to its first option when the value is absent.
 	 *
-	 * The date and taxonomy selects both carry an explicit "All …" option with an empty
+	 * The date and taxonomy selects all carry an explicit "All …" option with an empty
 	 * value, so clearing them is a plain assignment. The sort select may not: when the
 	 * instance's configured order has no matching preset there is no empty-valued option,
 	 * and assigning '' would leave the control blank. Falling back to the first option

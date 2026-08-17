@@ -10,10 +10,11 @@ use LoopGridSearch\Support\Config;
 use LoopGridSearch\Support\Criteria;
 use LoopGridSearch\Support\DateOptions;
 use LoopGridSearch\Support\TaxonomyOptions;
+use LoopGridSearch\Support\UrlState;
 
 /**
- * Renders the filter bar: keyword field, Month/Year select, taxonomy select, optional sort
- * select and the Clear Filters button.
+ * Renders the filter bar: keyword field, Month/Year select, one select per configured
+ * taxonomy, optional sort select and the Clear Filters button.
  *
  * Rendered once per instance on the initial page load and never replaced by AJAX, so the
  * visitor's focus, caret position and text selection inside the keyword field survive every
@@ -48,7 +49,9 @@ final class FiltersRenderer
         }
 
         if ($config->show_taxonomy()) {
-            $fields .= $this->render_taxonomy_field($config, $criteria, $instance_id);
+            foreach ($config->taxonomies() as $taxonomy) {
+                $fields .= $this->render_taxonomy_field($config, $criteria, $instance_id, $taxonomy);
+            }
         }
 
         if ($config->show_sort()) {
@@ -145,30 +148,56 @@ final class FiltersRenderer
     }
 
     /**
-     * Renders the taxonomy term dropdown for the configured taxonomy.
+     * Renders the term dropdown for one configured taxonomy.
+     *
+     * Returns '' when the taxonomy has no terms to offer — with post-type scoping on, a
+     * taxonomy shared with other post types can legitimately come back empty here, and a
+     * dropdown whose only entry is "All Categories" is worse than no dropdown at all.
+     *
+     * The `data-lgs-taxonomy` attribute is how the script knows which state key and which
+     * query parameter a given select owns; the `name` carries the same query parameter, so a
+     * dropdown is self-describing in the markup.
      *
      * @param  Config   $config
      * @param  Criteria $criteria
      * @param  string   $instance_id
+     * @param  string   $taxonomy    Validated taxonomy slug from the configured list.
      * @return string
      */
-    private function render_taxonomy_field(Config $config, Criteria $criteria, string $instance_id): string
-    {
-        $id      = $instance_id . '-taxonomy';
-        $options = TaxonomyOptions::get($config->taxonomy(), $config->post_type());
+    private function render_taxonomy_field(
+        Config $config,
+        Criteria $criteria,
+        string $instance_id,
+        string $taxonomy
+    ): string {
+        $options = TaxonomyOptions::get(
+            $taxonomy,
+            $config->post_type(),
+            $config->taxonomy_terms_in_post_type()
+        );
+
+        if ([] === $options) {
+            return '';
+        }
+
+        $id       = $instance_id . '-taxonomy-' . sanitize_html_class($taxonomy);
+        $selected = $criteria->term_for($taxonomy);
 
         $html = '<div class="ajax-post-search__field ajax-post-search__field--taxonomy">'
             . '<label class="ajax-post-search__label" for="' . esc_attr($id) . '">'
-            . esc_html((string) $config->get('taxonomy_label'))
+            . esc_html($config->taxonomy_label($taxonomy))
             . '</label>'
-            . '<select id="' . esc_attr($id) . '" class="ajax-post-search__taxonomy" name="lgs_term">'
-            . $this->render_option('', (string) $config->get('taxonomy_all_label'), !$criteria->has_term());
+            . '<select id="' . esc_attr($id) . '"'
+            . ' class="ajax-post-search__taxonomy"'
+            . ' name="' . esc_attr(UrlState::term_param($taxonomy)) . '"'
+            . ' data-lgs-taxonomy="' . esc_attr($taxonomy) . '">'
+            . $this->render_option('', $config->taxonomy_all_label($taxonomy), 0 === $selected);
 
         foreach ($options as $term_id => $name) {
             $html .= $this->render_option(
                 (string) (int) $term_id,
                 (string) $name,
-                (int) $term_id === $criteria->term_id()
+                (int) $term_id === $selected
             );
         }
 

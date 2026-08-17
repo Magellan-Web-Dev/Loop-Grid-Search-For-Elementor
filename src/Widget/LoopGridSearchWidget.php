@@ -7,6 +7,7 @@ namespace LoopGridSearch\Widget;
 if (!defined('ABSPATH')) exit;
 
 use Elementor\Controls_Manager;
+use Elementor\Repeater;
 use Elementor\Widget_Base;
 use LoopGridSearch\Frontend\AssetManager;
 use LoopGridSearch\Render\InterfaceRenderer;
@@ -311,23 +312,86 @@ final class LoopGridSearchWidget extends Widget_Base
             'options'     => self::taxonomy_options(),
             'default'     => 'post_tag',
             'condition'   => ['show_taxonomy' => 'yes'],
-            'description' => esc_html__('Any public taxonomy works, including custom ones such as resource_type.', 'loop-grid-search'),
+            'description' => esc_html__('Any public taxonomy works, including custom ones such as resource_type. Each entry lists the post types it is registered for — pick one that covers the post type above.', 'loop-grid-search'),
         ]);
 
         $this->add_control('taxonomy_label', [
-            'label'     => esc_html__('Taxonomy Label', 'loop-grid-search'),
-            'type'      => Controls_Manager::TEXT,
-            'default'   => esc_html__('Tag', 'loop-grid-search'),
-            'ai'        => ['active' => false],
-            'condition' => ['show_taxonomy' => 'yes'],
+            'label'       => esc_html__('Taxonomy Label', 'loop-grid-search'),
+            'type'        => Controls_Manager::TEXT,
+            'default'     => '',
+            'placeholder' => esc_html__('The taxonomy\'s own name', 'loop-grid-search'),
+            'ai'          => ['active' => false],
+            'condition'   => ['show_taxonomy' => 'yes'],
+            'description' => esc_html__('Leave empty to use the taxonomy\'s registered name (Tag, Category, Resource Type…).', 'loop-grid-search'),
         ]);
 
         $this->add_control('taxonomy_all_label', [
-            'label'     => esc_html__('"All Terms" Option Text', 'loop-grid-search'),
-            'type'      => Controls_Manager::TEXT,
-            'default'   => esc_html__('All Tags', 'loop-grid-search'),
-            'ai'        => ['active' => false],
-            'condition' => ['show_taxonomy' => 'yes'],
+            'label'       => esc_html__('"All Terms" Option Text', 'loop-grid-search'),
+            'type'        => Controls_Manager::TEXT,
+            'default'     => '',
+            'placeholder' => esc_html__('All + the plural name', 'loop-grid-search'),
+            'ai'          => ['active' => false],
+            'condition'   => ['show_taxonomy' => 'yes'],
+        ]);
+
+        // Terms whose only posts live in another post type can never return a result here, so
+        // offering them is a dead end for the visitor. See TaxonomyOptions for why WordPress's
+        // own hide_empty cannot express this.
+        $this->add_control('taxonomy_terms_in_post_type', [
+            'label'        => esc_html__('Only Terms Used By This Post Type', 'loop-grid-search'),
+            'type'         => Controls_Manager::SWITCHER,
+            'label_on'     => esc_html__('Yes', 'loop-grid-search'),
+            'label_off'    => esc_html__('No', 'loop-grid-search'),
+            'return_value' => 'yes',
+            'default'      => 'yes',
+            'condition'    => ['show_taxonomy' => 'yes'],
+            'description'  => esc_html__('Lists only terms that a published post of the selected post type actually has. Leave this on when a taxonomy is shared between post types, otherwise terms used only by other post types appear and always return no results. Applies to every taxonomy dropdown below as well.', 'loop-grid-search'),
+        ]);
+
+        // ── Additional taxonomy dropdowns ────────────────────────────────────────
+        // The primary dropdown above stays a plain set of controls so every existing widget
+        // keeps its saved settings; further dropdowns are repeater rows appended after it.
+        $extra = new Repeater();
+
+        // A blank first option, so a freshly added row does not *display* the first taxonomy
+        // in the list while its stored value is still empty — which reads as a dropdown that
+        // was configured and then failed to render.
+        $extra->add_control('taxonomy', [
+            'label'       => esc_html__('Taxonomy', 'loop-grid-search'),
+            'type'        => Controls_Manager::SELECT,
+            'options'     => ['' => esc_html__('— Select a taxonomy —', 'loop-grid-search')]
+                + self::taxonomy_options(),
+            'default'     => '',
+            'label_block' => true,
+        ]);
+
+        $extra->add_control('taxonomy_label', [
+            'label'       => esc_html__('Label', 'loop-grid-search'),
+            'type'        => Controls_Manager::TEXT,
+            'default'     => '',
+            'placeholder' => esc_html__('The taxonomy\'s own name', 'loop-grid-search'),
+            'ai'          => ['active' => false],
+            'label_block' => true,
+        ]);
+
+        $extra->add_control('taxonomy_all_label', [
+            'label'       => esc_html__('"All Terms" Option Text', 'loop-grid-search'),
+            'type'        => Controls_Manager::TEXT,
+            'default'     => '',
+            'placeholder' => esc_html__('All + the plural name', 'loop-grid-search'),
+            'ai'          => ['active' => false],
+            'label_block' => true,
+        ]);
+
+        $this->add_control('extra_taxonomies', [
+            'label'       => esc_html__('More Taxonomy Filters', 'loop-grid-search'),
+            'type'        => Controls_Manager::REPEATER,
+            'fields'      => $extra->get_controls(),
+            'default'     => [],
+            // Double braces, so an author-entered label is escaped before it reaches the panel.
+            'title_field' => '{{ taxonomy_label || taxonomy }}',
+            'condition'   => ['show_taxonomy' => 'yes'],
+            'description' => esc_html__('Add a dropdown per extra taxonomy — for example Category alongside Tag. A visitor\'s selections narrow the results together: choosing a category and a tag returns only posts that have both. Duplicates of the taxonomy above are ignored.', 'loop-grid-search'),
         ]);
 
         // ── Sort ─────────────────────────────────────────────────────────────────
@@ -533,6 +597,7 @@ final class LoopGridSearchWidget extends Widget_Base
     protected function render(): void
     {
         $settings = $this->get_settings_for_display();
+        $filters  = $this->collect_taxonomy_filters($settings);
 
         $config = Config::from_attributes([
             'post_type'           => $settings['post_type'] ?? null,
@@ -541,7 +606,11 @@ final class LoopGridSearchWidget extends Widget_Base
             'order'               => $settings['order'] ?? null,
             'search_columns'      => $settings['search_in'] ?? null,
             'search_meta_keys'    => $this->collect_search_meta_keys($settings),
-            'taxonomy'            => $settings['taxonomy'] ?? null,
+            // The primary Taxonomy control plus one entry per repeater row, in panel order.
+            'taxonomies'          => $filters['taxonomies'],
+            'taxonomy_labels'     => $filters['labels'],
+            'taxonomy_all_labels' => $filters['all_labels'],
+            'taxonomy_terms_in_post_type' => $settings['taxonomy_terms_in_post_type'] ?? null,
             'template_id'         => $settings['template_id'] ?? null,
             'pagination_mode'        => $settings['pagination_mode'] ?? null,
             'pagination_max_numbers' => $settings['pagination_max_numbers'] ?? null,
@@ -569,6 +638,63 @@ final class LoopGridSearchWidget extends Widget_Base
 
         // The interface HTML is assembled entirely from escaped values by the renderers.
         echo (new InterfaceRenderer())->render($config, (string) $this->get_id()); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    }
+
+    /**
+     * Flattens the taxonomy controls into one ordered filter list plus its label maps.
+     *
+     * The primary Taxonomy control comes first, then each "More Taxonomy Filters" row in panel
+     * order. Config de-duplicates and validates the slugs, so a row left blank or repeating the
+     * primary taxonomy costs nothing here.
+     *
+     * The primary dropdown's labels are deliberately left out of the maps: they travel as the
+     * instance-wide `taxonomy_label` / `taxonomy_all_label` keys, which is where a widget saved
+     * by an earlier version already keeps them.
+     *
+     * @param  array<string, mixed> $settings Resolved widget settings.
+     * @return array{taxonomies: list<string>, labels: array<string, string>, all_labels: array<string, string>}
+     */
+    private function collect_taxonomy_filters(array $settings): array
+    {
+        $taxonomies = [];
+        $labels     = [];
+        $all_labels = [];
+
+        $primary = is_scalar($settings['taxonomy'] ?? null) ? trim((string) $settings['taxonomy']) : '';
+
+        if ('' !== $primary) {
+            $taxonomies[] = $primary;
+        }
+
+        foreach ((array) ($settings['extra_taxonomies'] ?? []) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $taxonomy = is_scalar($row['taxonomy'] ?? null) ? trim((string) $row['taxonomy']) : '';
+
+            if ('' === $taxonomy) {
+                continue;
+            }
+
+            $taxonomies[] = $taxonomy;
+
+            $label = is_scalar($row['taxonomy_label'] ?? null) ? trim((string) $row['taxonomy_label']) : '';
+
+            if ('' !== $label) {
+                $labels[$taxonomy] = $label;
+            }
+
+            $all_label = is_scalar($row['taxonomy_all_label'] ?? null)
+                ? trim((string) $row['taxonomy_all_label'])
+                : '';
+
+            if ('' !== $all_label) {
+                $all_labels[$taxonomy] = $all_label;
+            }
+        }
+
+        return ['taxonomies' => $taxonomies, 'labels' => $labels, 'all_labels' => $all_labels];
     }
 
     /**
@@ -633,7 +759,13 @@ final class LoopGridSearchWidget extends Widget_Base
     }
 
     /**
-     * Returns the public taxonomies available in the Taxonomy dropdown.
+     * Returns the public taxonomies available in the Taxonomy dropdowns.
+     *
+     * Each label names the post types the taxonomy is registered for, because the panel's
+     * Post Type and Taxonomy controls are independent and pairing an unrelated two produces a
+     * filter that can never match anything. Elementor builds a SELECT's options once, at
+     * control-registration time, so the list cannot narrow itself when the post type changes —
+     * naming the post types inline is what makes the mismatch visible while choosing.
      *
      * @return array<string, string>
      */
@@ -642,10 +774,24 @@ final class LoopGridSearchWidget extends Widget_Base
         $options = [];
 
         foreach (get_taxonomies(['public' => true, 'show_ui' => true], 'objects') as $taxonomy) {
+            $post_types = [];
+
+            foreach ((array) $taxonomy->object_type as $post_type) {
+                $object = get_post_type_object((string) $post_type);
+
+                $post_types[] = null !== $object
+                    ? (string) ($object->labels->name ?? $post_type)
+                    : (string) $post_type;
+            }
+
             $options[$taxonomy->name] = sprintf(
-                '%s (%s)',
+                /* translators: 1: taxonomy singular name, 2: taxonomy slug, 3: comma-separated post type names */
+                _x('%1$s (%2$s) — %3$s', 'taxonomy control option', 'loop-grid-search'),
                 $taxonomy->labels->singular_name ?? $taxonomy->name,
-                $taxonomy->name
+                $taxonomy->name,
+                [] !== $post_types
+                    ? implode(', ', $post_types)
+                    : esc_html__('no post types', 'loop-grid-search')
             );
         }
 

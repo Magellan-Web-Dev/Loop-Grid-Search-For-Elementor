@@ -50,7 +50,7 @@ final class Config
         'post_type',
         'search_columns',
         'search_meta_keys',
-        'taxonomy',
+        'taxonomies',
         'posts_per_page',
         'template_id',
         'orderby',
@@ -92,6 +92,17 @@ final class Config
     private const MAX_SEARCH_META_KEYS = 20;
 
     /**
+     * Hard upper bound on taxonomy filter dropdowns.
+     *
+     * Each one is an extra tax_query clause, i.e. an extra pair of joins in the generated
+     * SQL, and an extra term query while rendering the filter bar. Ten is far past any
+     * sensible filter bar and keeps both bounded.
+     *
+     * @var int
+     */
+    private const MAX_TAXONOMY_FILTERS = 10;
+
+    /**
      * Default value for every recognised configuration key.
      *
      * @var array<string, mixed>
@@ -107,7 +118,15 @@ final class Config
         // "excerpt" field is the default so the plugin works out of the box.
         'search_meta_keys'   => ['excerpt'],
 
-        'taxonomy'           => 'post_tag',
+        // Taxonomy filter dropdowns, in the order they are rendered. One entry per dropdown,
+        // so an author can offer "by category AND by tag" rather than one or the other. The
+        // singular `taxonomy` attribute is still accepted and names the first dropdown.
+        'taxonomies'         => ['post_tag'],
+
+        // Only offer terms that a published post of the queried post type actually has. See
+        // TaxonomyOptions for why WordPress's own hide_empty cannot express this.
+        'taxonomy_terms_in_post_type' => true,
+
         'posts_per_page'     => 9,
         'orderby'            => 'date',
         'order'              => 'DESC',
@@ -149,8 +168,15 @@ final class Config
         'keyword_placeholder'  => '',
         'date_label'           => '',
         'date_all_label'       => '',
+        // Labels for the first taxonomy dropdown. Every further dropdown is labelled from
+        // the per-taxonomy maps below, falling back to the taxonomy's registered names.
         'taxonomy_label'       => '',
         'taxonomy_all_label'   => '',
+
+        // Per-taxonomy label overrides, keyed by taxonomy slug: ['category' => 'Section'].
+        'taxonomy_labels'      => [],
+        'taxonomy_all_labels'  => [],
+
         'sort_label'           => '',
         'clear_label'          => '',
         'no_results_text'      => '',
@@ -181,13 +207,15 @@ final class Config
             $values['post_type'] = self::DEFAULTS['post_type'];
         }
 
-        // ── Taxonomy: must exist and be public. Empty string disables the filter ─
-        if ('' !== $values['taxonomy'] && !self::is_valid_taxonomy($values['taxonomy'])) {
-            $values['taxonomy'] = self::is_valid_taxonomy(self::DEFAULTS['taxonomy'])
-                ? self::DEFAULTS['taxonomy']
-                : '';
-        }
-        if ('' === $values['taxonomy']) {
+        // ── Taxonomies: each must exist and be public ────────────────────────────
+        // Unknown slugs are dropped rather than replaced with the default, so one typo in a
+        // list of three cannot silently swap in an unrelated dropdown. An empty list (which
+        // is also what `taxonomy=""` produces) simply switches the term filter off.
+        $values['taxonomies'] = array_values(
+            array_filter($values['taxonomies'], static fn ($taxonomy): bool => self::is_valid_taxonomy($taxonomy))
+        );
+
+        if ([] === $values['taxonomies']) {
             $values['show_taxonomy'] = false;
         }
 
@@ -260,8 +288,10 @@ final class Config
         if (!self::is_valid_post_type($values['post_type'])) {
             return null;
         }
-        if ('' !== $values['taxonomy'] && !self::is_valid_taxonomy($values['taxonomy'])) {
-            return null;
+        foreach ($values['taxonomies'] as $taxonomy) {
+            if (!self::is_valid_taxonomy($taxonomy)) {
+                return null;
+            }
         }
         if (0 !== $values['template_id'] && !self::is_valid_template($values['template_id'])) {
             // A missing template is not a security problem — fall back to the PHP card.
@@ -317,10 +347,93 @@ final class Config
         return $this->search_meta_keys()[0] ?? '';
     }
 
-    /** @return string Taxonomy slug used by the term dropdown, or '' when disabled. */
+    /**
+     * Taxonomy slugs backing the term dropdowns, in render order.
+     *
+     * @return list<string> Empty when the term filter is switched off.
+     */
+    public function taxonomies(): array
+    {
+        return (array) $this->values['taxonomies'];
+    }
+
+    /**
+     * First taxonomy slug, or '' when the term filter is switched off.
+     *
+     * Retained under the original single-taxonomy name so a result card template copied from
+     * an earlier version — the bundled one prints its terms — keeps working unchanged.
+     *
+     * @return string
+     */
     public function taxonomy(): string
     {
-        return (string) $this->values['taxonomy'];
+        return $this->taxonomies()[0] ?? '';
+    }
+
+    /**
+     * Whether term dropdowns list only terms used by the queried post type.
+     *
+     * @return bool
+     */
+    public function taxonomy_terms_in_post_type(): bool
+    {
+        return (bool) $this->values['taxonomy_terms_in_post_type'];
+    }
+
+    /**
+     * Returns the visible label for one taxonomy's dropdown.
+     *
+     * Resolution order: an explicit per-taxonomy override, then (for the first dropdown only)
+     * the instance-wide `taxonomy_label` — which is where the original single-dropdown control
+     * still lands — then the taxonomy's own registered singular name.
+     *
+     * @param  string $taxonomy
+     * @return string
+     */
+    public function taxonomy_label(string $taxonomy): string
+    {
+        $override = (string) (((array) $this->values['taxonomy_labels'])[$taxonomy] ?? '');
+
+        if ('' !== $override) {
+            return $override;
+        }
+
+        if ($taxonomy === $this->taxonomy() && '' !== (string) $this->values['taxonomy_label']) {
+            return (string) $this->values['taxonomy_label'];
+        }
+
+        $object = get_taxonomy($taxonomy);
+
+        return false !== $object
+            ? (string) ($object->labels->singular_name ?? $taxonomy)
+            : $taxonomy;
+    }
+
+    /**
+     * Returns the "no term selected" option text for one taxonomy's dropdown.
+     *
+     * Same resolution order as {@see taxonomy_label()}, ending at "All <plural name>".
+     *
+     * @param  string $taxonomy
+     * @return string
+     */
+    public function taxonomy_all_label(string $taxonomy): string
+    {
+        $override = (string) (((array) $this->values['taxonomy_all_labels'])[$taxonomy] ?? '');
+
+        if ('' !== $override) {
+            return $override;
+        }
+
+        if ($taxonomy === $this->taxonomy() && '' !== (string) $this->values['taxonomy_all_label']) {
+            return (string) $this->values['taxonomy_all_label'];
+        }
+
+        $object = get_taxonomy($taxonomy);
+        $plural = false !== $object ? (string) ($object->labels->name ?? $taxonomy) : $taxonomy;
+
+        /* translators: %s: plural taxonomy name, e.g. "Categories" */
+        return sprintf(__('All %s', 'loop-grid-search'), $plural);
     }
 
     /** @return int Results per page (1–100). */
@@ -432,7 +545,7 @@ final class Config
     /** @return bool */
     public function show_taxonomy(): bool
     {
-        return (bool) $this->values['show_taxonomy'] && '' !== $this->taxonomy();
+        return (bool) $this->values['show_taxonomy'] && [] !== $this->taxonomies();
     }
 
     /** @return bool */
@@ -507,8 +620,22 @@ final class Config
             $values['search_columns'] = ['post_title'];
         }
 
-        if (isset($raw['taxonomy'])) {
-            $values['taxonomy'] = sanitize_key((string) $raw['taxonomy']);
+        // Two spellings feed one ordered list: `taxonomy` (the original single-dropdown
+        // attribute, still the first dropdown) and `taxonomies` (the full list). Supplying
+        // both appends the list after the singular value, which is exactly what the widget
+        // needs for "primary dropdown plus repeater rows".
+        if (isset($raw['taxonomy']) || isset($raw['taxonomies'])) {
+            $requested = [];
+
+            if (isset($raw['taxonomy'])) {
+                $requested = self::to_list($raw['taxonomy']);
+            }
+
+            if (isset($raw['taxonomies'])) {
+                $requested = array_merge($requested, self::to_list($raw['taxonomies']));
+            }
+
+            $values['taxonomies'] = self::normalize_taxonomies($requested);
         }
 
         if (isset($raw['posts_per_page'])) {
@@ -559,9 +686,21 @@ final class Config
         }
 
         // ── Booleans ─────────────────────────────────────────────────────────────
-        foreach (['show_keyword', 'show_date', 'show_taxonomy', 'show_sort', 'show_clear', 'seo_pagination'] as $flag) {
+        foreach (
+            [
+                'show_keyword', 'show_date', 'show_taxonomy', 'show_sort', 'show_clear',
+                'seo_pagination', 'taxonomy_terms_in_post_type',
+            ] as $flag
+        ) {
             if (isset($raw[$flag])) {
                 $values[$flag] = self::to_bool($raw[$flag]);
+            }
+        }
+
+        // ── Per-taxonomy labels ──────────────────────────────────────────────────
+        foreach (['taxonomy_labels', 'taxonomy_all_labels'] as $map_key) {
+            if (isset($raw[$map_key]) && is_array($raw[$map_key])) {
+                $values[$map_key] = self::normalize_label_map($raw[$map_key]);
             }
         }
 
@@ -628,6 +767,57 @@ final class Config
         sort($keys, SORT_STRING);
 
         return array_slice($keys, 0, self::MAX_SEARCH_META_KEYS);
+    }
+
+    /**
+     * Sanitises an ordered list of taxonomy slugs, de-duplicating and capping it.
+     *
+     * Author order is preserved — it is the order the dropdowns render in — so unlike the
+     * meta-key list this is deliberately *not* sorted. Duplicates keep their first position.
+     * Signature stability still holds: sanitize_key() is idempotent, cannot emit a comma, and
+     * de-duplication of an already-unique list is a no-op, so re-normalising this method's own
+     * output reproduces it byte for byte.
+     *
+     * @param  list<string> $requested
+     * @return list<string>
+     */
+    private static function normalize_taxonomies(array $requested): array
+    {
+        $slugs = [];
+
+        foreach ($requested as $taxonomy) {
+            $slug = sanitize_key((string) $taxonomy);
+
+            if ('' !== $slug) {
+                $slugs[$slug] = true;
+            }
+        }
+
+        return array_slice(array_keys($slugs), 0, self::MAX_TAXONOMY_FILTERS);
+    }
+
+    /**
+     * Sanitises a taxonomy-slug => label map.
+     *
+     * Render-time only (never signed, never transmitted), so no ordering guarantees are
+     * needed here — only that both halves are safe to print.
+     *
+     * @param  array<mixed, mixed> $raw
+     * @return array<string, string>
+     */
+    private static function normalize_label_map(array $raw): array
+    {
+        $map = [];
+
+        foreach ($raw as $taxonomy => $label) {
+            $slug = sanitize_key((string) $taxonomy);
+
+            if ('' !== $slug && is_scalar($label)) {
+                $map[$slug] = sanitize_text_field((string) $label);
+            }
+        }
+
+        return $map;
     }
 
     /**
@@ -774,8 +964,10 @@ final class Config
             'keyword_placeholder' => __('Search…', 'loop-grid-search'),
             'date_label'          => __('Date', 'loop-grid-search'),
             'date_all_label'      => __('All Dates', 'loop-grid-search'),
-            'taxonomy_label'      => __('Tag', 'loop-grid-search'),
-            'taxonomy_all_label'  => __('All Tags', 'loop-grid-search'),
+            // taxonomy_label / taxonomy_all_label are deliberately absent: an empty value
+            // means "use the taxonomy's own registered name", which {@see taxonomy_label()}
+            // resolves per dropdown. Defaulting them to "Tag" / "All Tags" here would label a
+            // Category dropdown "Tag" the moment an author points the filter somewhere else.
             'sort_label'          => __('Sort By', 'loop-grid-search'),
             'clear_label'         => __('Clear Filters', 'loop-grid-search'),
             'pagination_prev_label' => __('Previous', 'loop-grid-search'),
